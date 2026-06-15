@@ -1,0 +1,2801 @@
+            The Algebraic CheapLunch:
+           Extending FreeLunch Attacks
+       on Arithmetization-Oriented Primitives
+                 Beyond CICO-1
+
+ Antoine Bak1,2 , Augustin Bariant3 , Aurélien Boeuf1 , Pierre Briaud4 , Morten
+                        Øygarden4 , Atharva Phanse4
+                              1
+                               INRIA, Paris, France
+                               2
+                                DGA, Paris, France
+                             3
+                               ANSSI, Paris, France
+                         4
+                           Simula UiB, Bergen, Norway
+            antoine.bak@inria.fr, augustin.bariant@ssi.gouv.fr,
+                           aurelien.boeuf@inria.fr
+                 {pierre,morten.oygarden,atharva}@simula.no
+
+
+      Abstract. The security of many arithmetization-oriented (AO) hash
+      functions depends of the hardness of Constrained-input constrained-
+      output (CICO) problems. These problems have received significant at-
+      tention from the cryptographic community in recent years, with notable
+      advances in Gröbner basis and resultant-based attacks, yet progress has
+      mainly been limited to CICO problems restricted to a single output.
+      In this work, we build on the “FreeLunch method” of Bariant et al.
+      (Crypto 2024) that constructs Gröbner bases “for free” in this particu-
+      lar case, and extend it to CICO problems with multiple outputs. More
+      precisely, we consider tools for solving weighted polynomial systems,
+      and show how to apply them in the AO setting. This results in new
+      polynomial modelings, more efficient methods for computing the initial
+      Gröbner basis under certain assumptions, and improved complexity esti-
+      mates for the change of ordering step, derived from tighter upper bounds
+      on the ideal degree. We apply our framework to Poseidon, Neptune and
+      XHash8, where our assumptions are experimentally verified, and theory
+      matches practice. For Griffin and ArionHash our assumptions are not
+      verified, leaving us with improved, yet loose, upper bounds on the ideal
+      degree. While our results do not threaten the security of any full-round
+      hash function, they provide new insights into the security of these prim-
+      itives under more general CICO problems.
+
+      Keywords: Gröbner basis · Hash function · Poseidon · XHash · Arion-
+      Hash · Griffin
+
+
+1   Introduction
+The increasing deployment of practical zero-knowledge (ZK) proof protocols has
+created a need for hash functions that allow a preimage to be proven efficiently
+using the corresponding proof system. The construction of these hash functions
+depends a lot on the cost model of the target proof system. In general, a re-
+quirement is that the round functions of the permutation can be verified using a
+low-degree function, hence the name Arithmetization-Oriented (AO). This can
+be achieved by having the entire round function be of low degree, such as in Po-
+seidon [34] and Neptune [37], or by including operations that have a low degree
+inverse, such as in Anemoi [16], XHash [2], Griffin [31], and ArionHash [44]. Due
+to their inherent algebraic structure, algebraic attacks (especially Gröbner basis
+attacks) are often the main attack vector against these hash functions. We re-
+mark that some recent designs also rely on the use of Split-and-Lookup S-boxes,
+such as Monolith [33], Reinforced Concrete [32], and Tip5 [45], which will remain
+beyond the scope of this analysis.
+    AO hash functions are typically constructed by first designing a permutation
+F : Ftp −→ Ftp and then using it in a sponge construction [14]. By their very na-
+ture, the security of hash functions in sponge constructions is directly dependent
+on the difficulty of solving the Constrained-Input Constrained-Output (CICO)
+problem for the underlying permutation. The abovementioned algebraic attacks
+generally proceed by modeling this CICO problem as a multivariate polynomial
+system, and then find its solution(s). These solutions can, in turn, be used to
+instantiate attacks on the overall sponge construction.
+    The CICO modeling is usually solved as follows. First, ones computes a
+Gröbner basis for the ideal it generates, with respect to a suitable monomial
+order. This first basis is then converted into a second Gröbner basis that contains
+a univariate polynomial, whose roots contain the value of one of the entries of a
+solution. The remaining entries are now (comparatively) easy to recover. While
+the default choice in earlier attacks on AO hash functions was to adopt the grevlex
+order for the first step, recent progress came from choosing an “easier” order
+tailored to the modeling [7,17], for which generic Gröbner basis algorithms [19,20]
+seemed more efficient or could even be bypassed. For the second step, all attacks
+rely on change-of-ordering algorithms in the FGLM framework [28].
+    Estimating the complexity of these two steps is essential for assessing the se-
+curity guarantees of a given hash function. These complexities are influenced by
+intrinsic properties of the CICO modeling such as regularity conditions, or the
+degree of the associated ideal. However, these properties are often challenging
+to determine theoretically. As a result, many earlier works have taken a more
+pragmatic approach by partially relying on small-scale experiments for this esti-
+mation – or indeed to extrapolate the entire solving cost from small-scale tests.
+The difficulties in estimating these attacks are generally related to understand-
+ing the particular structure of the underlying AO permutation, in combination
+with that of the precise CICO problem we are trying to solve. In particular, a
+more fine-grained examination of these structures has already led to improved
+solving methods and, in some cases, to improved polynomial modelings [7,17].
+
+Influence of the prime field size. The size of the prime p in the finite field Fp
+used in ZK-friendly primitives varies greatly depending on the use case. It ranges
+from 31-bit primes (eg. in Plonky3) to 256-bit primes when the field is the scalar
+
+
+                                         2
+field of an elliptic curve. When p ∼ 2256 , a permutation in sponge mode with
+capacity c = 1 is sufficient for guaranteeing 128 bits of security against collision
+and preimage attacks. This makes CICO-1 – i.e., the CICO problem with a single
+degree of input freedom, and a single output is observed – relevant for assessing
+the security of the sponge hash function. However, for smaller fields, such as 64
+or 31-bit prime fields5 , a larger capacity is required for guaranteeing 128 bits
+of security. In this setting, a study of the CICO-k problem for k > 1 is more
+relevant for assessing the security of the hash function.
+
+Previous works. In the CICO-1 setting, several works have already been able
+to leverage the structure of the input modeling to obtain more efficient attacks,
+for instance, by choosing a custom ordering for which this modeling is already
+a Gröbner basis [7] and/or by using resultants for variable elimination to ob-
+tain a univariate expression in a somewhat more direct way than using FGLM
+methods [47,8]. While these approaches have been very successful for CICO-k
+problems with k = 1, it is unclear whether they can be extended to larger values
+of k. The case of k > 1 has received much less attention from the cryptographic
+community. So far, most works in this setting either extrapolate complexity esti-
+mates from experiments on reduced primitives (see [3] for Poseidon and [40] for
+Anemoi) or use generic bounds on the Gröbner basis computation with respect
+to the grevlex ordering to estimate the complexity of the first step [36]. The only
+exception we are aware of is the recent work of [17] on Anemoi, that derives an
+explicit Gröbner basis for CICO-k with t = 2k branches, and proves the degree
+of the ideal it generates.
+
+Our results. In this work, we propose an extension of the so-called FreeLunch
+approach of [7] to the k > 1 case, that we refer to as the “CheapLunch” approach.
+In particular, we give a general framework allowing us to model primitives in
+such a way that, under some genericity assumptions and for a custom monomial
+ordering, a Gröbner basis of the modeling can be computed efficiently (though
+not quite “for free”). In turn, this transfers the bottleneck for Gröbner basis
+attacks from the Gröbner basis computation step to the change-of-ordering step,
+just as in the FreeLunch setting when k = 1.
+    This custom ordering, as well as our estimates for the first step, are related
+to well-known results on weighted systems [26]. The initial motivation for using
+these results was, in fact, to compute tight upper bounds on the ideal degree
+DI , as these bounds are instrumental to estimate the change-of-ordering step.
+Finally, when the genericity assumptions required by the CheapLunch framework
+do not hold, our work still provides (loose) upper bounds on DI . We find these
+to be valuable in cases where such bounds were either entirely missing, or purely
+experimentally derived.
+    We have applied our framework to a number of primitives, all backed by
+experiments6 . The underlying genericity assumptions are verified for Poseidon,
+5
+    As in the instances of Poseidon2 used in the Ethereum bounty program.
+6
+    Our     code    is    available at    https://github.com/atharva-simulauib/
+    algebraic-cheaplunch
+
+
+                                         3
+Neptune and XHash8. As a particular contribution, we provide a new modeling
+for the CICO-k problem for the two former primitives, to which our framework
+can be applied and prove bounds on the ideal degree that were first claimed
+in [11]. We note that the results on Poseidon are especially timely due to the
+ongoing cryptanalysis initiative organized by the Ethereum Foundation (see the
+earlier footnote). We also apply the CheapLunch framework to Griffin and
+ArionHash, although we find that the genericity assumptions are not satisfied for
+these primitives. Our results are summarized in Table 1.
+
+
+           Primitive                      DI ≤               Cheap GB        source
+                                               k·R
+        Anemoi (2k = t)              (d + 2)                     ✓            [17]
+    XHash8 (k + nS ≤ t)              (dnS +2k )R                 ✓        Section 4.1
+                                         k·RF +RP
+          Poseidon                   d                           ✓        Section 4.2
+                                     k·RF        RP †
+                                   4       ·d                             Section 4.2
+          Neptune                                                ✓
+                            4(k−1)Rf,1 +Rf,2 · dRP −(t−k)‡                Section 4.3
+           Griffin                   (d2 · 3k )R                 ✗        Section 5.1
+          ArionHash                       (16)                   ✗        Section 5.2
+
+    †
+    Sponge mode, without round skipping tricks.
+    ‡
+    Preimage on k output coordinates in compression mode, with subspace trails.
+Table 1. Ideal degree DI and applicability of the CheapLunch method to solve CICO-k
+on several primitives, where t is the number of branches, d is the degree of the monomial
+power maps, and R is the number of rounds (RF for full rounds and RP for partial
+rounds for Poseidon and Neptune), without considering round-skipping tricks.
+
+
+
+
+Outline. We provide background on the CICO problem in sponge hash functions,
+Gröbner bases and weighted systems in Section 2. Our approach is presented in
+Section 3, where we define CheapLunch systems and then detail how to perform
+and analyze the two solving steps when these systems satisfy the genericity
+assumptions of above. We provide applications where these assumptions are
+verified in Section 4, and conclude with cases where they are not in Section 5.
+
+
+2       Preliminaries
+
+2.1      CICO problem
+
+The main focus of this work will be the analysis of AO hash functions using the
+sponge construction [14]. These sponges are, in our setting, typically instanti-
+ated via AO permutations F : Ftq → Ftq (where Fq is a finite field). A crucial
+
+
+                                             4
+security requirement for these constructions is for the underlying permutation
+to be secure with respect to the Constrained-Input Constrained-Output (CICO)
+problem. For algebraic cryptanalysis, this problem is typically defined as follows.
+
+
+Definition 1 (CICO-(in,out) Problem). Let F : Ftq −→ Ftq be a permutation
+and let 1 ≤ in,out < t such that in + out ≤ t. The CICO-(in,out) problem
+asks to find x ∈ {0}in × Ft−in
+                          q    such that F (x) ∈ {0}out × Ft−out
+                                                           q     .
+Said differently, a CICO-(in,out) instance is a CICO instance where out output
+constraints of F need to be satisfied through the choice of t − in degrees of
+freedom in the input. We recall the sponge construction and discuss how CICO
+problems are related to concrete hash function attacks in Appendix A. When
+in = out = k, we simply use the notation CICO-k.
+    As mentioned in the introduction, the majority of recent algebraic cryptanal-
+yses focuses on the CICO-1 case, with the exception of [17] in the case of Anemoi.
+In the works of [7,47,8], the condition out = 1 (or in = 1 if F −1 is considered)
+is a requirement for the applicability of their attacks and no straightforward
+adaptation exists for larger out values. We also note that other works relying
+on extrapolating scaled-down experiments [9,40] pragmatically target CICO-1,
+as the CICO problem is easier in this setting and thus allows more reliable ex-
+trapolations. In this work, however, we will tackle the general CICO-(in,out)
+problem with in≥ 2 and out≥ 2 for various permutations, through both theo-
+retical arguments and extensive experiments.
+    The initial step in our attacks is to model a given CICO problem as a system
+of multivariate polynomial equations whose common solution(s) correspond to
+the solution(s) of this problem. Possible modelings will be further explored in
+Section 4 and 5, while the rest of Section 2 is devoted to solving tools.
+
+2.2   Polynomial system solving via Gröbner bases
+Let {P1 , . . . , Pm } ⊂ F[x1 , . . . , xn ] be a polynomial system over a field F and let
+I = ⟨P1 , . . . , Pm ⟩ be its associated ideal. An essential tool for computing with I
+– which will ultimately allow us to solve {P1 , . . . , Pm } – is that of Gröbner bases,
+which are defined up to a choice of monomial ordering. A monomial ordering is
+a well-order on Nn such that if α ≺ β, then α + γ ≺ β + γ for γ ∈ Nn . We say
+that xα ≺ xβ if α ≺ β. In this paper, we will make use of the three following
+monomial orderings:
+ – Lexicographical (lex ): We have α ≺lex β if there exists an index 1 ≤ i ≤ n
+   such that αj = βj , j < i and αi < βi .
+ – Weighted graded reverse lexicographical (wgrevlex ): Let w ∈ Rn≥0 a weight
+                                     Pn            Pn             Pn
+   vector.
+   Pn      We have that α ≺w β if i=1 wi αi < i=1 wi βi or i=1 wi αi =
+     i=1 wi βi and α ≻lex β (note that we take the reversed lexicographical
+   order in the case where the two monomials have the same weight).
+ – Graded reverse lexicographical (grevlex ): This order is a particular case of
+   the wgrevlex ordering, in the case where w = (1, . . . , 1).
+
+
+                                            5
+For a polynomial P , we denote by LM≺ (P ) its leading monomial with respect
+to ≺ and by P top its homogeneous component of highest weight with respect to
+a given weight vector w.
+Definition 2 (Gröbner Basis). A Gröbner basis of I with respect to a mono-
+mial ordering ≺, also referred to as a ≺-Gröbner basis of I, is a set of polynomials
+G ⊂ I such that
+
+              ⟨LM≺ (h) | h ∈ I⟩ = ⟨LM≺ (g) | g ∈ G⟩ := ⟨LM (G)⟩ .
+
+We moreover say that G is reduced if every g ∈ G is monic, and does not contain
+any monomial in LM≺ (G \ {g}).
+From the knowledge of a Gröbner basis of an ideal, one can perform reductions
+modulo this ideal. For a polynomial P and a system G that is a ≺-Gröbner basis,
+we denote by RedG,≺ (P ) its reduction modulo I = ⟨G⟩ using the ordering ≺, i.e.,
+the only polynomial in P + I which contains no monomial in ⟨LM≺ (h) | h ∈ I⟩.
+    Due to the elimination property of the lex ordering, we know that the (re-
+duced) Gröbner basis of a zero-dimensional ideal contains a univariate polyno-
+mial Gn in xn , and we can solve the remaining system efficiently from its roots.
+Note that some recent cryptanalyses of Anemoi [40,17] have put emphasis on the
+extra property that the ideal is in shape position [30] to facilitate this remaining
+solving process. Although it helps simplify the approach, and while this property
+is generic for radical zero-dimensional ideals [10], it is not strictly needed in our
+setting. Indeed, while the number of variables n in the system may be fairly
+large, we are usually interested in solving CICO-(in,out) problems, in which we
+only need to recover at most in variables. Furthermore, we expect a significant
+reduction in complexity as more of these variables are recovered. We may thus
+summarize the main steps of solving a zero-dimensional ideal I as:
+
+ 1. Find a Gröbner basis of I for a suitable monomial order.
+ 2. Convert this Gröbner basis into a Gröbner basis in the lex order.
+ 3. Solve the polynomial Gn and recover the solutions.
+
+In the general case, we expect Step 1. to be the bottleneck in solving I, with
+grevlex chosen as the default order as it is usually the most efficient in practice to
+compute Gröbner bases. However, this is not necessarily true for the AO setting,
+where Step 1. can sometimes be made trivial through the use of weighted orders
+tailored to the underlying permutation [7]. In this case, we naturally expect Step
+2. to form the bottleneck of the solving method. Indeed, either way, we typically
+expect that Step 3. will be negligible compared to the first two steps.
+
+
+2.3   Gröbner bases for weighted homogeneous systems
+
+Our approach will make use of a tailored wgrevlex ordering for the first Gröbner
+basis computation. While the analysis of Gröbner basis algorithms with respect
+to graded monomial orders (i.e., w = (1, . . . , 1)) is well-known among experts
+
+
+                                          6
+in algebraic cryptanalysis when applied to generic systems, we anticipate that
+readers may be less familiar with the case of more general weight vectors w;
+the analysis of which has been mainly restricted to the computer algebra liter-
+ature7 [25,26]. We therefore devote this subsection to survey the results from
+this area that will be useful to us. As in the graded case, it seems that tighter
+complexity bounds are known for Gröbner basis algorithms applied to weighted
+homogeneous systems than to affine ones. In fact, if our affine CICO modeling
+satisfies a regularity condition detailed below, we will see that finding a first
+Gröbner basis reduces to computing a Gröbner basis for the homogeneous com-
+ponents of maximal weighted degree. As such, we do not focus on the affine case
+here, and will return to it in Section 5 when this condition does not apply.
+    For homogeneous systems, it is known that a grevlex Gröbner basis can be
+computed incrementally by performing row reduction on homogeneous Macaulay
+matrices up to some degree D using Lazard’s approach [42]. Note that state-of-
+the-art Gröbner basis algorithms [19,20] follow the same framework. In [25,26],
+these algorithms have been adapted to a weighted homogeneous system P by
+observing that for any polynomial P that is homogeneous with respect to w, the
+polynomial homw (P ) := P (xw              wn
+                              1 , . . . , xn ) is homogeneous in the usual sense. For
+                                1
+
+
+instance, their approach is to apply [19,20] to the system
+
+                      homw (P) = {homw (P1 ), . . . , homw (Pm )},
+
+without requiring any modifications, and then to deduce from the grevlex Gröbner
+basis of homw (P) the desired reduced Gröbner basis for P [26, Proposition 10].
+This method leverages the structure of P, as it does not consider all the homo-
+geneous Macaulay matrices associated to the system.
+
+Definition 3 (Weighted homogeneous Macaulay matrix). Let P ⊂ F[x]
+be a system that is weighted homogeneous with respect to a weight vector w. The
+associated weighted homogeneous Macaulay matrix of weight D is the matrix
+whose rows represent the polynomials xα Pi , wt(xα Pi ) = D and the columns
+represent the monomials of weight D. The coefficient ((α, i), β) is equal to the
+coefficient of xβ in xα Pi .
+
+The approach of [26] can equivalently be viewed as performing row reduction on
+Macaulay matrices of this kind up to a certain degree, referred to as the weighted
+degree of regularity wdreg .
+
+Definition 4 (Weighted degree of regularity, Definition 2 in [26]). The
+weighted degree of regularity of a weighted homogeneous system P, denoted wdreg ,
+is the lowest degree D such that the rowspan of the Macaulay matrices of weight
+d ≤ D contains a wgrevlex Gröbner basis of P.
+
+7
+    The only exception that we are aware of is [22], which applied to methods of [25] in
+    elliptic curve cryptanalysis.
+
+
+                                            7
+   If w1 , . . . , wn denote the respective weights of x1 , . . . , xn , then the number of
+entries in the weighted Macaulay matrices can be bounded by
+                                                            n
+                                   (                                              )
+                                                         X
+                                                     n
+      SD(wdreg ; (w, 1)) := # (a1 , . . . , an ) ∈ N             wi · ai ≤ wdreg , (1)
+                                                                          i=1
+
+where SD is known as the Sylvester denumerant. There is no analytic formula
+for this value, but it can be computed exactly using the generating series in [1,
+Theorem 4.1.2]. For our purposes, it will be sufficient to approximate this value
+(as in [26, Section 5]) and estimate the complexity of computing a wgrevlex
+Gröbner basis for a weighted homogeneous system P of m polynomials in n
+variables by                         ω            ω 
+                                 1          n + wdreg
+                         O    Qn                           ,                  (2)
+                                i=1 wi          n
+where 2 ≤ ω ≤ 3 is the linear algebra constant and wdreg is the weighted degree
+of regularity. This estimate calls for tight upper bounds on wdreg . Such bounds
+are known under standard genericity assumptions used for graded systems, by
+taking into account the extra weight condition. The first of these is as follows.
+Definition 5 (Regular sequence, Definition 4 in [26]). Let (w1 , . . . , wn )
+be a system of weights and let P = (P1 , . . . , Pm ) ⊂ F[x1 , . . . , xn ] be a sequence
+of weighted homogeneous polynomials of respective weighted degrees d1 , . . . , dm .
+The sequence P is said to be regular in F[x1 , . . . , xn ] if it satisfies one of the
+following equivalent properties
+ 1. ∀i ∈ {1..m}, Pi is not a zero divisor in F[x1 , . . . , xn ]/⟨P1 , . . . , Pi−1 ⟩;
+ 2. The Hilbert series of the ideal generated by P is equal to
+                                                  Qm
+                                                        (1 − z di )
+                        HF[x1 ,...,xn ]/⟨P⟩ (z) = Qni=1        wi
+                                                                    .                                         (3)
+                                                   i=1 (1 − z )
+
+Remark 1. Both of the equivalent conditions above will be useful to us. Indeed,
+we will use Condition 1. for complexity estimates and theoretical arguments on
+regularity, while we will adopt Condition 2. in experimental verification.
+For a regular sequence P, the weighted degree of regularity can be upper bounded
+by the weighted Macaulay bound [25, Theorem 2]:
+                                             n
+                                             X
+                                 wdreg ≤           (di − wi ) + max {wi }.                                    (4)
+                                             i=1
+
+This bound can be further sharpened if the sequence P satisfies the following
+slightly stronger property.
+Definition 6 (Simultaneous Noether Position (Determined Case)). Let
+P = (P1 , . . . , Pn ) be a polynomial sequence in F[x1 , . . . , xn ]. We say that P is in
+Simultaneous Noether Position (SNP) if for all 1 ≤ i ≤ n, the projected sequence
+(P1 (x1 , . . . xi , 0, . . . , 0), . . . , Pi (x1 , . . . xi , 0, . . . , 0)) is regular over F[x1 , . . . , xi ].
+
+
+                                                        8
+    If the sequence P is in SNP, and its weighted degrees satisfy a certain con-
+dition relative to w, the following upper bound on wdreg holds.
+
+Theorem 1 (Theorem 12 in [26]). Let (w1 , . . . , wn ) be a system of weights
+and let P = (P1 , . . . , Pm ) be a sequence of weighted homogeneous polynomials
+of respective weighted degrees d1 , . . . , dm such that di is divisible by wi for any
+1 ≤ i ≤ n and di ≥ wi−1 for any 2 ≤ i ≤ n. Assume that the sequence P is
+in SNP for the variable ordering x1 > · · · > xn . Then the weighted degree of
+regularity of P is bounded by
+                                       n
+                                       X
+                             wdreg ≤     (di − wi ) + wn .
+                                       i=1
+
+
+
+2.4   Ideal degree for weighted homogeneous systems
+
+The complexity of the change-of-order algorithms used in the second step in the
+solving method presented in Section 2.2 is polynomial in the degree of the ideal,
+which we define in the following. A lengthier discussion on these algorithms will
+be provided in Appendix C.
+
+Definition 7 (Ideal degree). For a zero-dimensional ideal I ⊂ F[x1 , . . . , xn ],
+the ideal degree DI is the dimension of the F-vector space F[x1 , . . . , xn ]/I.
+
+For weighted homogeneous systems, the ideal degree can be upper bounded using
+the weighted Bézout bound
+                                     Qn
+                                           di
+                              DI ≤ Qni=1 ,                                (5)
+                                          w
+                                       i=1 i
+
+that can be seen as a particular case of the BKK bound [12,39,41]. We will not
+discuss equality cases here, though we note that they do arise in particular when
+the input sequence is regular. For example, the following result is derived in [25,
+Theorem 2] by evaluating the Hilbert series of Definition 5 with m = n at z = 1.
+
+Theorem 2 (Weighted Bézout equality in the regular case, Theorem
+2 in [25]). Let (w1 , . . . , wn ) be a system of weights and let P = (P1 , . . . , Pn ) be
+a sequence of weighted homogeneous polynomials of respective weighted degrees
+d1 , . . . , dn which is also regular. Then, the degree of the ideal ⟨P⟩ is equal to the
+weighted Bézout bound:
+                                              Qn
+                                                   di
+                                      D⟨P⟩ = Qni=1 .
+                                                   w
+                                                i=1 i
+
+For an affine system P whose components of highest weight form a homogeneous
+regular sequence, it is explained at the end of [26, §5.2] that one can use the same
+bound in the complexity estimates.
+
+
+                                             9
+3     The CheapLunch Framework for Solving CICO-k
+
+The CICO modeling we consider is akin to that of [7, Section 3]. We recall its
+generation in Section 3.1 on a toy example. The rationale behind our approach
+is to pick a certain weighted monomial order for which we can precisely analyze
+the first Gröbner basis computation for several ciphers, and which allowed us to
+find tighter upper bounds on the ideal degree.
+    To find a first Gröbner basis, we observe that this order effectively splits
+our modeling into two parts: one part Q for which we will compute a Gröbner
+basis G(Q) and one part P whose leading monomials will be coprime to those
+of G(Q), whenever Qtop is regular. Using Propositions 3 and 4 from Appendix
+A.1), the system P ∪ G(Q) is then a Gröbner basis, making the computation of
+G(Q) the only non-trivial task in our first step. Note that the use of tailored
+monomial orders to ensure coprimality among the leading terms of polynomials
+has already been studied in [7,47] for the AO setting. However, when Qtop is not
+regular, one cannot apply the same Gröbner basis approach.
+    In the change of ordering step, we also use this weighted structure in order
+to give tight upper bounds on the ideal degree DI and to marginally improve
+generic FGLM estimates (Section 3.5 and Appendix C).
+
+
+3.1     Toy example
+
+Recall that we are interested in solving the CICO-(in,out) problem (Defini-
+tion 1) for an AO permutation F : Ft → Ft . For the purposes of illustration,
+we set t−in = out = k, that is, we want to solve for x1 , . . . , xk such that
+F (0, . . . , 0, x1 , . . . , xk ) = (0, . . . , 0, ∗, . . . , ∗). Furthermore, let F be of the form
+   | {z } | {z }                      | {z } | {z }
+      t−k            k                  k         t−k
+
+
+                             F = Ar ◦ S ◦ Ar−1 ◦ S ◦ · · · ◦ S ◦ A0 ,
+
+where Ai : Ft → Ft is an invertible, affine mapping for 0 ≤ i ≤ r, and
+                                                                                             
+                                      1/α
+          S : (z1 , . . . , zt ) 7−→ z1 , f2 (z1 , . . . , zt ), . . . , ft (z1 , . . . , zt ) ,
+
+where f2 , . . . , ft are polynomials of degree d, and α > 1 is an integer such that
+the power 1/α forms an inverse map over F. To ensure both efficiency and a high
+overall degree, the integers d and α are typically be chosen to be small, while
+1/α is large (as a power over F).
+
+
+Polynomial modeling. The modeling we consider is (a slight generalization
+of) the modeling considered in [7, Section 3]. The idea is to symbolically evaluate
+the permutation F round by round from the initial x-variables x1 , . . . , xk , and
+only introduce new y-variables and equations to circumvent the large degree
+caused by the power 1/α. More concretely, write (h1 , . . . , ht ) for the symbolic
+evaluation of the state before the ℓ-th S-box, where each hi is a polynomial in
+
+
+                                                     10
+the variables x, y1 , . . . , yℓ−1 . The first entry in the output state is represented by
+a new variable yℓ , while the remaining entries are defined by symbolic evaluation
+of the input state. The output of the S-box is
+
+                       (yℓ , f2 (h1 , . . . , ht ), . . . , ft (h1 , . . . , ht )) ,
+
+and the equation relating the new variable yℓ to the earlier input state is
+
+                    Pℓ (x, y1 , . . . , yℓ ) = yℓα − h1 (x, y1 , . . . , yℓ−1 ),       (6)
+
+which is added to the polynomial system. This construction yields a system of
+k + r polynomials over F[x, y], where y := y1 , . . . , yr . This system can further
+be divided into two parts: P = {P1 , . . . , Pr } which are the round polynomials
+as described in (6), and Q = {Q1 , . . . , Qk } which are given by the symbolic
+state of the k first outputs of F , which we require to be zero. Note that the
+polynomials in Q will depend on all variables x, y and generically be of degree
+dr . The equations Pi will be of degree di , and contain the variables x, y1 , . . . yℓ .
+
+Monomial ordering. The idea of [7] was to choose a weighted order in which
+yiα is the leading term of Pi . To achieve this, we consider a weight vector
+w = (wx , wy ), where wx ∈ Zk and wy ∈ Zr encode the weight of the x- and
+y-variables, respectively. Following [7], we choose wx = (1, . . . , 1) and wy =
+(1, d, d2 , . . . , dr−1 ). On the one hand, examining the weighted degree of Pℓ in
+Equation (6) yields
+
+                          wt(h1 ) ≤ dℓ−1 < αdℓ−1 = wt(yℓα ),
+
+which ensures that LM(Pℓ ) = yℓα , for all 1 ≤ ℓ ≤ r. On the other hand, the poly-
+nomials in Q will have weight at most dr , which can only be achieved by mono-
+mials in pure x-variables. Thus, we generically expect the leading monomials in
+                                                                                  r
+the Qi -polynomials to only depend on x. In particular, we expect LM(Q1 ) = xd1
+when k = 1, which implies that all polynomials in {P, Q1 } have coprime leading
+terms under this monomial order, and hence form a Gröbner basis for the asso-
+ciated ideal by Proposition 4. In fact, this particular case readily corresponds to
+the FreeLunch setting of [7].
+
+The Case of k ≥ 2. When k ≥ 2, one can no longer directly apply the above
+reasoning, as the leading monomials in the polynomials Q can no longer be
+expected to be coprime (although they still only depend on x under the above
+weight vector w). Moreover, since all variables x are introduced at the start,
+and are presumable efficiently mixed throughout the application of F , it seems
+very unlikely that there will exist combinations of polynomial modelings and
+monomial orders that will yield a direct Gröbner basis without any computation.
+Still, we note that the above modeling {P, Q} yields a portion of the polynomials,
+P, whose leading monomials are well-behaved and coprime with respect to y and
+the other polynomials. In particular, if the Gröbner basis G(Q) were to contain
+leading monomials only involving x, the above approach could be adapted.
+
+                                                   11
+    We will see that this scenario occurs whenever the system Qtop formed by
+the components of highest weight in Q is regular in the sense of Definition 5 (to
+achieve this, we may possibly refine the modeling of Q and carefully choosing
+wx ). In this case, we can essentially reduce the problem of Gröbner basis com-
+putation for the whole system {P, Q} ⊂ R := F[x, y] to the well-understood
+problem of Gröbner basis computation of the weighted regular system Qtop in
+the polynomial subring Rx := F[x].
+    Definition 8 formalizes the type of polynomial system illustrated in our toy
+example, that will be the focus of our work. Note again that FreeLunch systems
+as introduced in [7] correspond to the case m = 1 in this definition.
+
+Definition 8 (CheapLunch system (CLS)). Let m, n ≥ 0 and R =
+F[x1 , . . . , xm , y1 , . . . , yn ] be a ring with a weighted monomial ordering w. We
+say that the polynomials P1 , . . . , Pn , Q1 , . . . , Qm ∈ R form a CheapLunch sys-
+tem (CLS) if the following is satisfied.
+                  α
+      LM(Pj ) = yj j , αj ≥ 1, for all 1 ≤ j ≤ n,
+      Qtop
+       i   ∈ F[x1 , . . . , xm ] for all 1 ≤ i ≤ m.
+
+We moreover write P = (P1 , . . . , Pn ) and Q = (Q1 , . . . , Qm ).
+
+Motivated by the above discussion, the rest of Section 3 will study the solving of
+CheapLunch systems for which the top part Qtop is regular. Non-regular Cheap-
+Lunch systems arising from some AO hash functions are tackled in Section 5.
+
+Definition 9 (Regular CheapLunch system). By slight abuse of terminol-
+ogy, we say that a CheapLunch system {P, Q} ⊂ R is regular for a weight vector
+w = (wx , wy ) if the sequence Qtop formed by the components of highest weight
+in Q is regular in Rx in the sense of Definition 5 for the weight vector wx .
+
+
+3.2     Gröbner bases for regular CheapLunch systems
+
+We now justify the first step of our solving method for regular CheapLunch
+systems. We will see that the regularity of Qtop plays a role much beyond its use
+in the estimate for computing G(Qtop ). As in the graded case, Lemma 1 below
+follows from the absence of degree falls in Q when Qtop is weighted regular and
+shows that a Gröbner basis G(Q) can be computed from that of G(Qtop ).
+
+Lemma 1. Let Q = (Q1 , . . . , Qm ) ⊂ F[x1 , . . . , xm ] be an affine sequence and let
+≺ be some (weighted)
+                 Pm    monomial order for which Qtop is regular. Suppose further
+that the set { j=1 fij · Qtop
+                           j }1≤i≤g is a reduced ≺-Gröbner basis of ⟨Q
+                                                                                top
+                                                                                    ⟩ =
+   top         top
+                                        P m
+⟨Q1 , . . . , Qm ⟩. Then we have that { j=1 fij Qj }1≤i≤g is a (not necessarily
+reduced) ≺-Gröbner basis for the inhomogeneous ideal I = ⟨Q1 , . . . , Qm ⟩.
+                                                               Pm
+Proof. Using Definition 2, we want to show that LM (h) ∈ ⟨LM ( j=1 fij Qj ) | 1 ≤
+i ≤ g⟩ for any element h ∈ I. Without loss of generality, we can assume that h
+
+
+                                           12
+                  Pm
+is of the form h = j=1 hj Qj , where hj is top-reduced by ⟨Q1 , . . . , Qj−1 ⟩. We
+can now rewrite h as follows:
+                    m               m                  m
+                                          htop top
+                                                         (hj − htop top
+                    X               X                  X
+              h=          hj Qj =          j Qj    +            j )Qj
+                    j=1             j=1                j=1
+                    m                     m
+                           top      top
+                                            (hj − htop       top
+                    X                     X
+                +         hj (Qj − Qj ) +          j )(Qj − Qj ) .
+                    j=1                         j=1
+
+
+We can distinguish two cases:
+                          Pm                                    Pm top top
+1. Case LM (h) = LM ( j=1 htop         top
+                                 j Qj ). In this case,              j=1 hj Qj    ∈ ⟨Qtop ⟩,
+                           Pm
+   hence LM (h) ∈ ⟨LM ( j=1 fij Qtop   j ) | 1 ≤ i ≤ g⟩.
+                          Pm
+2. Case LM (h) ̸= LM ( j=1 htop   j   Q top
+                                        j ). As the other terms in the sum have
+                                         m
+   lower weight, this implies that j=1 htop           top
+                                       P
+                                              j Qj          = 0. Thus, there exist 1 ≤
+                      top             top top          top
+   i ≤ m such that hi ̸= 0 and hi Qi ∈ ⟨Qi−1 , . . . , Qtop          1 ⟩. As the sequence
+   is regular, this implies that htop
+                                    i   ∈  ⟨Qtop
+                                             i−1 , . . . , Q top
+                                                             1   ⟩,  which contradicts the
+   assumption that hi is top-reduced by ⟨Q1 , . . . , Qi−1 ⟩.
+                                                                                         ⊔
+                                                                                         ⊓
+
+Finally, Proposition 1 gives the structure of the Gröbner basis for a regular
+CheapLunch system {P, Q}, obtained from G(Q) by simply appending the poly-
+nomials of P.
+
+Proposition 1 (Gröbner basis of a regular CLS). Let {P, Q} be a regular
+CheapLunch system with respect to a weighted monomial order ≺ and let G(Q)
+be a ≺-Gröbner basis of Q. Then, the set G(Q) ∪ P is a ≺-Gröbner basis for the
+ideal ⟨P⟩ + ⟨Q⟩.
+
+Proof. Using the proof of Lemma 1, we have that ⟨LM (Q)⟩ = ⟨LM (Qtop )⟩ as
+Qtop is weighted regular. In particular, this means that the leading monomials
+of the elements in G(Q) will be in F[x1 , . . . , xm ]. We can eventually apply Buch-
+berger’s Criterion (Proposition 3 in Appendix B) to any pair of distinct elements
+f1 , f2 ∈ G(Q) ∪ P to conclude. First, if both f1 and f2 belong to G(Q), then
+Spol(f1 , f2 ) will reduce to 0 by applying this criterion in the reverse direction
+in the Gröbner basis G(Q). Otherwise, if f1 or f2 is an element of P, then its
+leading monomial will, by Definition 8, be coprime to the leading monomial of
+the other element of the pair, and we can conclude by Proposition 4.               ⊔
+                                                                                   ⊓
+
+
+3.3   Gröbner basis computation procedure
+
+Lemma 1 and Proposition 1 suggest a natural way of computing a Gröbner
+basis of a regular CheapLunch system {P, Q}. The idea is to first compute a
+Gröbner basis for Qtop over the subring F[x1 , . . . , xm ], which can then be lifted
+to a Gröbner basis for (P, Q) in the larger ring R. We proceed as follows:
+
+
+                                               13
+ 1. Compute homogeneous polynomials {fij } ⊂ F[x1 , . . . , xm ] such that
+                                              
+                                 Xm           
+                      G(Qtop ) =      fij Qtop
+                                            j
+                                              
+                                        j=1
+                                                      1≤i≤g
+
+    forms a reduced Gröbner basis for Qtop .
+ 2. Using {fij }, multiply with the respective Qj -polynomials to compute the set
+                                                 
+                                     X m         
+                            G(Q) =         fij Qj        .
+                                                 
+                                       j=1
+                                                   1≤i≤g
+
+ 3. Return G(Q) ∪ P as a Gröbner basis for the full system.
+
+3.4   Complexity estimates
+We now estimate the complexity of the method described in Section 3.3. We will
+assume that the system {P, Q} can be efficiently computed and fully reduced
+according to the relevant weighted order ≺ for any given instance, as is required
+by Lemma 1. In particular, this means that for all 1 ≤ i ≤ m and 1 ≤ j ≤ n, we
+have degyi (Qj ) < αi (as the monomials of higher yi -degree can be reduced by the
+leading monomial of Pi ). A similar task has been studied and estimated under
+the name of sysGen in [8, Section 3], and we expect their work to translate
+to our use cases in a straightforward manner. The analysis of [8] further shows
+that, with a few minor exceptions, sysGen does not form the bottleneck of an
+attack, and we expect the same to hold in our case.
+
+Step 1. The first step of our procedure consists of computing a Gröbner basis
+of Qtop over F[x1 , . . . , xm ], i.e., a homogeneous system of m equations in m
+variables. To estimate the complexity of this step, we can readily use Equation (2)
+with n = m (determined case):
+                                                   wdreg +m
+                                                             !ω
+                                             ω
+                 C1 = (SD(wdreg ; (w, 1))) ≈      Qmm           ,
+                                                     i=1 wi
+
+
+where wdreg is the weighted degree of regularity of Qtop (Definition 4). As we are
+already assuming that Qtop is regular by applying this procedure, we can upper
+bound wdreg by the Macaulay bound (4). If we further assume that this system
+is also in SNP (Definition 6), we may also use the stronger bound of Theorem 1.
+
+Step 2. The second step performs polynomial multiplications between the co-
+efficients fij of the elements of G(Qtop ) in terms of the original generating set
+Qtop and the Qi polynomials, recalling that G(Qtop ) is reduced and that all
+Qj -polynomials have been properly reduced by the Pi ’s according to ≺. If we
+
+
+                                        14
+let A := {0, . . . , α1 − 1} × · · · × {0, . . . , αn − 1} ⊂ Nn , we can then write these
+Qj -polynomials as follows:
+                                    X
+                            Qj =        Qj,a (x1 , . . . , xm ) · ya ,
+                                 a∈A
+                                                         Qn
+and it is easy to see that there are at most |A| = j=1 αj terms Qj,a in the
+sum. To compute each fij · Qj , we first compute the individual products fij ·
+Qj,a (x1 , . . . , xm ) for each a ∈ A and sum them together. From the definition of
+the weighted degree of regularity, we know that
+                      wdeg(fij · Qj,a (x1 , . . . , xm )) ≤ wdreg .
+                                                              Qn
+Thus, the second step amounts to performing mg · ( j=1 αj ) multiplications
+of polynomials in m variables whose result has weighted degree at most wdreg ,
+where g is the size of the reduced Gröbner basis G(Qtop ). Using [28, Corollary
+2.1], this latter quantity can be upper bounded by m · D⟨Qtop ⟩ . To estimate the
+complexity of each of the multiplications, we make use of the following result:
+Theorem 3 (Multivariate multiplication [46]). Let P1 , P2 ∈ F[x1 , . . . , xm ]
+such that wdeg(P1 ) + wdeg(P2 ) ≤ D. Let assume that F has at least D points in
+arithmetic progression. Then we can compute the product P1 · P2 in time:
+         O (m · M (D)/D · SD(D; (w, 1))) = O(m · M (SD(D; (w, 1)))) ,
+where
+                                                       m
+                          (                                                )
+                                                                                  D+m
+                                                                                      
+                                                       X
+                                                   m
+    SD(D; (w, 1)) = # (a1 , . . . , am ) ∈ N                 wi · ai ≤ D       ≃ Qmm
+                                                       i=1                        i=1 wi
+
+is the number of terms of weight at most D from Equation (1), and
+                           M (d) = O(d · log(d) log log(d))
+is the time complexity for multiplying univariate polynomials of degree d.
+Applying this result to our case with D = wdreg yields the following complexity
+bound for the second step:
+                                       n
+                                       Y
+                 C2 = m3 D⟨Qtop ⟩ ·          αj · M (SD(wdreg ; (w, 1))),
+                                       j=1
+
+where SD(wdreg ; (w, 1)) is given in Equation (1).
+                                                                          Qn
+Cost comparison. Note that the cost of Step 1. does not depend on j=1 αj ,
+while the cost of Step 2. only grows linearly with it. This is in contrast to the
+                                                         Qn        ω
+change of ordering step, whose cost will grow with         j=1 αj    . As such, we
+expect that this method will allow us to significantly reduce the cost of Gröbner
+basis computation for several instances of ZK-friendly primitives, and that it
+will transfer the bottleneck of the overall attack to the change of ordering step.
+Examples of this will be given in Section 4.
+
+
+                                              15
+3.5   Change of ordering step
+It remains to estimate the complexity of the change of ordering, whose cost has
+already been stated to be polynomial in DI in Section 2.4. To do so, we instan-
+tiate more fine-grained bounds from the computer algebra literature and/or we
+slightly improve them using the CheapLunch particularities.
+    We start by recalling some known results for converting a Gröbner basis from
+the wgrevlex ordering to the lex ordering in the zero-dimensional case. Most al-
+gorithms for this purpose work as follows: we define the F-linear maps Txi over
+R/I as P 7→ xi · P (mod I), represented as a DI × DI matrix in F for some basis
+of R/I. It is known that the characteristic polynomial of Txn lies in the ideal I.
+Hence, by computing this characteristic polynomial and finding its root(s), we
+recover the n-th coordinate of a solution. Computing the characteristic polyno-
+mial of Txn is done in two steps: first, choose a basis of R/I and compute the
+matrices of the Txi under this choice of basis. Those matrices are known as mul-
+tiplication matrices. Then, compute the characteristic polynomial of Txn using
+linear algebra algorithms. While the second step has received a lot of attention
+in the computer algebra community [21,24,13], the first step was less studied
+since it is free under the stability property that is expected for generic systems.
+However, this property is not verified by our systems. The first work tackling the
+multiplication matrix computation is the original FGLM paper [23], that gives
+a complexity in O(n · DI3 ) where n is the number of variables. With a refined
+complexity analysis, we show in Appendix C.1 that under the stability and SNP
+assumption of the Qtop , and if the weights of the xi ’s w.r.t. ≺ are all equal to wx
+for 1 ≤ i ≤ m, the computation of all multiplication matrices in the CheapLunch
+case would have a complexity of
+                                   (n + m) · DI3 · wx
+                                                     
+                             O                          .                          (7)
+                                      deg≺ (Qm )
+    A more recent work [27] leverages fast linear algebra to compute the multi-
+plication matrices in time O(dmax · nω DIω ), where dmax is the maximal degree of
+elements in the canonical basis of R/I and n is the number of variables. We adapt
+this algorithm
+          Pn+m to weighted orderings and refine its analysis in Appendix C.2. Let
+wdmax ≤ i=1 (di − wi ) be the maximal weighted degree of monomials in the
+canonical basis of R/I; if the weights wi are integer, the complexity for the
+computation of the multiplication matrix for CLS is:
+
+                           O wd3−ω            ω−1 ω
+                                                     
+                                  max (n + m)     DI .                        (8)
+
+The choice of the best multiplication matrices computation algorithm among (7)
+and (8) depends on the parameters of the CLS.
+   Then, we use more recent algorithms than FGLM to compute the desired
+characteristic polynomial (for a detailed discussion on these algorithms, see Ap-
+pendix C). Among them, the Hermite Normal Form (HNF) algorithm [13] pro-
+vides the characteristic polynomial of Txm in time
+
+          O(tω                      2                            ω−1
+                                                                     
+              m M (DI /tm )(log(tm ) + log(DI /tm ))) = Õ DI · tm     ,      (9)
+
+
+                                         16
+where tm is a sparsity indicator of this multiplication matrix. More precisely,
+the matrix Txm has two sets of columns: those which come from the identity
+matrix, thus only containing one nonzero entry, and those which are dense or
+close to dense. The parameter tm is the number of these dense columns. It
+is shown in Appendix C that for a CheapLunch system and under the SNP
+and stability assumptions for Q, and if the wt≺ (xi ) = wx for 1 ≤ i ≤ m and
+a certain weight wx , the multiplication matrix Txm has a sparsity indicator
+tm ≤ 2DI wx /deg≺ (Qm ). Taking ω = 2 and neglecting logarithmic factors in
+Equation (9) as a conservative estimate from a designer’s point of view, we get
+the following lower bound on the complexity:
+
+                             DI2 wt≺ (xm )/deg≺ (Qm ) .                       (10)
+
+Note that this conservative bound also roughly corresponds to the number of
+non-zero coefficients in the multiplication matrix. We will use (8) with ω = 2.807
+as a realistic complexity estimate from an attacker’s point of view. In contrast,
+the estimate (10) will be used as a worst case scenario from the designer’s point
+of view.
+
+
+4     Primitives with Regular CheapLunch Systems
+We now apply the framework of Section 3 to CheapLunch systems arising from
+AO hash functions that are assumed to be regular (i.e., for which the part
+Qtop is regular) from Hilbert series experiments (see Remark 1). While being
+weighted regular is a generic property [26, Proposition 4], we have no way to
+prove regularity for Qtop apart from proving its Hilbert series.
+
+4.1     XHash8
+XHash8 [2] is a permutation derived from Rescue-Prime Optimized (RPO) [4]
+that is defined over F12                                             64  32
+                      p , where p is the so-called Goldilocks prime 2 − 2 + 1.
+It is designed to be used in a sponge construction with rate 8 and capacity 4,
+and was originally defined alongside another permutation called XHash12. The
+particularity of XHash8 is that some of its nonlinear layers are partial: they
+only activate 8 out of 12 branches. It is for that reason that our framework
+directly applies to XHash8, and not to its siblings Rescue, Rescue-Prime, RPO
+and XHash12. Using the notations of the original XHash paper, we decompose
+XHash8 into the following 10 steps:
+
+                  (F )(B ′ )(P 3)(F )(B ′ )(P 3)(F )(B ′ )(P 3)(M C),
+
+where
+ – the (F ) step is an affine layer followed by the application of x 7→ x7 to the
+   whole state,
+ – the (B ′ ) step is an affine layer followed by the application of x 7→ x /7 to 8
+                                                                           1
+
+
+   out of 12 branches of the state,
+
+                                          17
+ – the (P 3) step is a constant injection followed by the mapping of the 12 Fp
+   elements to 4 Fp3 elements8 , which are then raised to the 7-th power:
+           (s0 , . . . , s11 ) 7→ (S0 , S1 , S2 , S3 ) 7→ (S07 , S17 , S27 , S37 ) 7→ (s′0 , . . . , s′11 ).
+     Altogether, this step can be represented as a polynomial of total degree 7
+     over F12
+           p , which we use in the construction of polynomial models of XHash8.
+
+For a figure of the round function, see Appendix 4.
+
+CICO-(12 − k, k) model for XHash8 (no round skip). We use the same system
+as the authors of the Freelunch [7, Section 4.3 and Appendix A], expanded to
+CICO-(12 − k, k). In other words, we have k input variables x1 , . . . , xk , and as
+many intermediate variables as there are x 7→ x /7 Sboxes: for the j-th (B ′ ) step,
+                                                      1
+
+
+we define y1,j , . . . , y8,j at the output of these Sboxes, lexicographically higher
+than all previously defined variables. We give the following weights to these
+variables:
+                          wt(xi ) = 1      for 1 ≤ i ≤ k,
+                         wt(yi,j ) = 72j−2 for 1 ≤ i ≤ 8, 1 ≤ j ≤ 3.
+Then, the full system is a CheapLunch system that contains, for 1 ≤ i ≤ 8,
+                                                         7
+1 ≤ j ≤ 24, a polynomial Pi,j of leading monomial yi,j      , and for 1 ≤ i ≤ k,
+                                 top                    6
+a polynomial Qi such that Qi has weighted degree 7 and is in F[x1 , . . . , xk ].
+Indeed, at the j-th (B ′ ) step, we introduce new monomials y1,j , . . . , y8,j of weight
+72j−2 on branches that contain an Sbox, and the branches that don’t have an
+Sbox contain polynomials whose top homogeneous part is in F[x1 , . . . , xk ] and
+has weight 72j−1 . From Theorem 2, we directly get the following bound on DI
+for solving CICO-(12 − k, k):
+                                              DI ≤ 724+6k .
+Finally, notice that Qtop is generated by k homogeneous polynomials of degree
+76 in k variables. We can use Theorem 1 (which is in fact the classical Macaulay
+bound in this context) and get that
+                                       wdreg ≤ k(76 − 1) + 1.
+
+Experimental results. We verified our approach experimentally on versions of
+XHash8 with less rounds and less branches. Our results are summarized in Ta-
+ble 9. Let nS be the number of Sboxes in (B ′ ) (so, nS = 8 for the full XHash8).
+In our experiments, we have noted that whenever t < nS + k, then the ideal gen-
+erated by Qtop does not have dimension 0. However, as long as nS + k ≤ t, our
+assumptions work well and the bound on DI is tight. Note that the full sponge
+used for XHash has capacity 4, therefore it is sufficient to solve CICO-(8, 4) to
+break the scheme, and we conjecture that Qtop has dimension 0 in this case, as
+nS + c = t. We believe that CICO-(7, 5) and CICO-(6, 6) are still of academic
+interest, but arguably less so.
+8
+    To define this map, one must choose a “representation” of Fp3 – in other words, an
+    irreducible polynomial of degree 3 in Fp . The authors of XHash do not give that
+    polynomial: instead, they give the algebraic normal form of (P 3) in [2, Appendix A].
+
+
+                                                      18
+About Conjecture 1 of [2]. A conjecture is given in the paper where XHash is
+defined. The authors call it the “Monotonous Ideal Degree Conjecture”. With
+our notations, this conjecture translates to, for solving any CICO-(12 − k, k),
+DI ≥ 730 . It comes from the leading monomials of the form yi,j    7
+                                                                      for each (P ′ )
+                                         6
+layer Sbox, and a leading monomial x7i for some i in Q. This intuition is true
+in our case, assuming that Q is regular, following Proposition 1. Indeed, we get
+                        7
+that the monomials yi,j    are leading monomials in the reduced Gröbner basis of
+⟨P, Q⟩, and all other leading monomials come from G(Q). The leading monomials
+of G(Q) are those of G(Qtop ), which must have, for all i, a leading monomial
+                6
+divisible by x7i , as Qtop is homogeneous of degree 76 . Thus, we get the following:
+
+Proposition 2. We can define a CheapLunch system Q, P to solve CICO-(12−
+k, k) instances of XHash8 for k ≤ 4, and assuming that Q is regular, its ideal
+degree can be bounded by:
+                             730 ≤ DI ≤ 724+6k ,
+which validates Conjecture 1 of [2] in this context (without round skips).
+
+On round skips. We refer to [5, Appendix D] and D.1 for the round skip method,
+as XHash falls exactly in this framework. With this, we find that for CICO-1
+and CICO-2, we can skip the first (F ) layer, and respectively 9 Sboxes (8 for
+XHash8) and 2 Sboxes of the first (P ′ ) layer. For CICO-3 and CICO-4, we expect
+that it would decrease the degree of the ideal respectively by 72 and 7.
+
+4.2    Poseidon and Neptune
+Polynomial modeling In this section, we describe a polynomial modeling
+for the CICO problem on both Poseidon and Neptune, that will feature a
+CheapLunch structure and get us a tight upper bound on the ideal degree. We
+recall that both primitives are defined as:
+
+        E (RF ) ◦ · · · ◦ E (Rf,1 +1) ◦ I (RP ) ◦ . . . I (1) ◦ E (Rf,1 ) ◦ · · · ◦ E (1) ◦ ME ,
+
+where we let RF = Rf,1 + Rf,2 , the E (i) are permutations of degree d for Posei-
+                                                                             (j)
+don and 4 for Neptune, and I (j) are defined as I (j) (x) = MI ·SI (x)+CI , with
+SI (x) = (xd1 , x2 , . . . , xt ). As our analysis of Poseidon and Neptune in sponge
+mode will be similar, we set δ the degree of the full rounds of the primitive (ie.
+δ = d for Poseidon and δ = 4 for Neptune). We define a polynomial modeling
+of the CICO-(t − k, k) problem as follows:
+ – We let k + RP variables (x1 , . . . , xk , y1 , . . . , yRP ). We let the input of the
+   permutation to be (x1 , . . . , xk , 0, . . . , 0). The state of the permutation after
+   the first Rf,1 full rounds becomes
+                                (0)                           (0)
+                             (R1 (x1 , . . . , xk ), . . . , Rt (x1 , . . . , xk ))
+                    (0)
+      where the Ri        have total degree δ Rf,1 in the xj .
+
+
+                                                   19
+ – Let 1 ≤ i ≤ RP , we define polynomials Pi (x1 , . . . , xk , y1 , . . . , yi ) as follows:
+          (i)                                               (i)
+   let (R1 (x1 , . . . , xk , y1 , . . . , yi−1 ), . . . , Rt (x1 , . . . , xk , y1 , . . . , yi−1 )) the state
+   after the i-th partial round, we let
+                                                                          (i−1)
+            Pi (x1 , . . . , xk , y1 , . . . , yi ) = yi − R1                         (x1 , . . . , xk , y1 , . . . , yi−1 ) .
+    Thus, the state after the partial nonlinear layer becomes
+                                                 (i−1)                               (i−1)
+                                   (yid , R2             (x, y), . . . , Rt                  (x, y)) ,
+                                    (i)
+    and we can get the polynomials Rj by multiplying this vector with MI and
+                                (i)
+   adding the round constant C .
+                                                  (R )               (R )
+ – After all partial rounds, we get the state (R1 P (x, y), . . . , Rt P (x, y)). By
+   applying the last Rf,2 full rounds, we get a state (Q1 (x, y), . . . , Qt (x, y))
+   and add the equations Q1 (x, y), . . . , Qk (x, y) to the system. Finally, the
+   ideal corresponding to the CICO problem is:
+                                        I = ⟨P1 , . . . , PRP , Q1 , . . . , Qk ⟩ .
+
+Monomial ordering. We give the following weights to the variables:
+ – wt(xj ) = d for 1 ≤ j ≤ k.
+ – wt(yi ) = δ Rf,1 for 1 ≤ i ≤ RP .
+                                                                                                                            (i)
+The weights have been chosen such that the weighted degree of the state Rj , 1 ≤
+j ≤ t, 0 ≤ i ≤ RP stays upper bounded by d · δ Rf,1 through the partial rounds.
+Moreover, we order the variables in such a way that, for monomials with an
+equal weight: y1 ≻ · · · ≻ yRP ≻ x1 ≻ · · · ≻ xk .
+
+
+     x1                      (0)                                  (1)
+                            R1 (x1 , x2 )   xd     y1d          R1 (x1 , x2 , y1 )     xd     y2d                            Q1
+
+     x2                      (0)                                  (1)
+                            R2 (x1 , x2 )                       R2 (x1 , x2 , y1 )                                           Q2
+
+      0
+             Rf,1            (0)
+                            R3 (x1 , x2 )
+                                                           MI
+                                                                  (1)
+                                                                R3 (x1 , x2 , y1 )
+                                                                                                    MI       Rf,2
+                             (0)                                  (1)
+      0                     R4 (x1 , x2 )                       R4 (x1 , x2 , y1 )
+
+
+
+
+               Fig. 1. The polynomial modeling in the case k = 2, RP = 2.
+
+
+
+
+A CheapLunch structure We prove that the system we defined has a Cheap-
+Lunch structure. Indeed, after replacing Pi with NF≻,⟨P1 ,...,Pi−1 ⟩ (Pi ) and the
+Qj with NF≻,⟨P1 ,...,PRP ⟩ (Qj ) (which can be done efficiently during the system
+generation), we get a polynomial system with the following properties:
+ – Qtop
+    j
+                                 d
+        ∈ Fp [x1 , . . . , xk , yR P
+                                     ] for 1 ≤ j ≤ k, and P1top ∈ Fp [x1 , . . . , xk ].
+         top       d
+ – LM(Pj ) = yj−1 for 2 ≤ j ≤ RP .
+Thus, setting P = {P2 , . . . , PRP }, Q = {P1 , Q1 , . . . , Qc }, we get a CheapLunch
+system. We also made extensive tests to check the regularity of the system, and
+all of them succeeded (see the parameters we verified in Table 4).
+
+
+                                                                20
+Evaluating the weighted degree of regularity To compute the complexity
+of the Gröbner basis computation, we have to estimate the weighted degree of
+regularity of the system, as defined in Definition 4. The system Q contains k
+equations of weight d · δ RF and 1 equation of weight d · δ Rf,1 in k variables of
+weight d and one of weight δ Rf,1 . Thus, applying the weighted Macaulay bound
+with the SNP assumption yields:
+                wdreg ≤ d · k(δ RF − 1) + (δ Rf,1 − δ Rf,1 /d) + 1 .
+                                                                  
+
+   However, we have seen that for all 1 ≤ i ≤ k, Qtop    j
+                                                                                       d
+                                                              ∈ Fp [x1 , . . . , xk , yR P
+                                                                                           ].
+                                       d                     Rf,1
+Thus, we can set a new variable ỹ = yR  P
+                                           of   weight d · δ      . Such an    operation
+does not change the degree of regularity of the ideal, and applying the same
+bound on the new system yields:
+    wdreg ≤ d · k(δ RF − 1) + (δ Rf,1 − δ Rf,1 ) + 1 = d · k(δ RF − 1) + 1 .
+                                                                                 
+
+This bound is matched in our experiments. For instance, the estimates from
+Section 3.4 yield a Gröbner basis for Poseidon in time:
+                        ω
+            k · dRF + 2                                           k · dRF + 2
+                                                                          
+      1                         3    k·RF +RP −1          1
+                            + k   · d            · M                             .
+    dRf,1       k+1                                    dRf,1 −1       k+1
+
+Ideal degree To evaluate precisely the degree of the ideal, we make use of the
+weighted Bézout bound as stated in Theorem 2. We have that the equations Qi
+have weighted degree d·δ RF , and the equations Pj have weighted degree d·δ Rf,1 .
+Moreover, the variables xi have weight d and the variables yj have weight δ Rf,1 .
+The weighted Bézout bound yields:
+           DI ≤ (d · δ RF )k · (d · δ Rf,1 )RP /(δ RP ·Rf,1 · dk ) = δ k·RF · dRP .
+We conjecture that this bound is achieved.
+   Note that a similar result for Poseidon has already been reported in [11,
+Section 10.1], where the ideal degree of the CICO-k problem was evaluated as
+                                 DI = dk·(RF −2)+RP +1 .
+To the best of our knowledge, the authors of this report did not publish any
+proof of it. The difference between this result and ours comes from the fact they
+considered Poseidon instances with only RF − 1 full rounds and starting with
+a layer of monomials instead of a linear layer.
+
+Skipping rounds on Poseidon Following [9], our attacks on Poseidon can
+be improved by tricks allowing to skip the first rounds, and thus reduce the
+ideal degree. In general, it is feasible reduce the degree in the first s = ⌊t/k⌋ − 2
+variables xi of the polynomials by a factor d, reducing the ideal degree by a factor
+ds . Additionally, some instances of Poseidon2 use non-MDS matrices, which
+may make this round-skipping trick more efficient than expected. We observed
+for instance that in the case t = 16, k = 1, two rounds can be freely skipped
+using the ME matrix from Poseidon2. We leave as an open problem a further
+study of this phenomena. Full details are provided in Appendix D.1.
+
+
+                                             21
+Comparison to previous cryptanalysis of CICO-k
+
+Comparison to [3] We report in Table 2 a comparison between our attacks and
+a previous Gröbner basis cryptanalysis on very high security level instances. We
+recall that their instances have been generated using p ∼ 2128 , c = λ/128, t = 3·c
+to ensure λ bits of security against CICO-c attacks (but only λ/2 bits of security
+against collision attacks or 2-block preimage attacks in sponge mode). The round
+numbers have then been generated using the formulas from the Poseidon design
+paper taking into account the security margin. For each instance, we have added
+two rows depending on the complexity estimate we consider for the change of
+ordering step (we use (8) when taking into account the complexity for generating
+the multiplication matrix, and (10) corresponds to a conservative choice from
+the designers’ point of view). We discard the column on the univariate solving
+step as it is never a bottleneck in our or their attack.
+
+
+         λ        d     t    k     RF     RP       GB        FGLM       source
+                                                 712.98     705.67        [3]
+       1024       3    24    8      8     85                673.32       (8)
+                                                 367.94
+                                                            456.47       (10)
+                                                 430.71      615.40       [3]
+        512       5    12    4      8     57                 588.25      (8)
+                                                 303.81
+                                                            390.08       (10)
+                                                 351.56      593.25       [3]
+        384       7     9    3      8     47                 566.46      (8)
+                                                 287.81
+                                                            370.57       (10)
+        256       3    49    7      6     46     219.30     253.59       (10)
+             Table 2. Comparison with [3] on high security level instances.
+
+
+
+
+Comparison to designers’ analysis Using conservative estimates from the de-
+signers’ point of view, we compared our estimates to the expected security level
+for full Poseidon with no security margin (ie. RF = 6, and no margin on RP ),
+taking ω = 2 which corresponds to a conservative choice from a designer point
+of view. Our analysis using (10) outperforms their analysis for some 256 bit
+instances (DI2 /dRF ≃ 2253.59 on the full version, without security margin). We
+emphasize that even with ω = 2, we found no attacks on full Poseidon with its
+security margin for realistic security levels (80 ≤ λ ≤ 256).
+
+Comparison to [36] This article exploits some invariant subspace property in
+the internal rounds to reduce the degree of the equations compared to a trivial
+
+
+                                          22
+forward modeling of Poseidon. In particular, they find a linear subspace S (ℓ) ⊂
+Ftp of dimension k such that for 0 ≤ r ≤ ℓ − 1, y ∈ S (ℓ) , we have that
+                            (MIr y) · (1, 0, . . . , 0) = 0 .
+This way, we can skip the first ℓ partial rounds, which will reduce the degree of
+the equations by dℓ . While the authors evaluated the complexity of the Gröbner
+basis step by making some tradeoffs in the generic complexity formula for grevlex
+Gröbner basis, they also provided a conjecture on the ideal degree achieved by
+their modeling. They conjectured [36, Conjecture 1] that
+                               DI = dt·Rf,1 +RP −ℓ .
+Note that the authors made their experiments using Rf,1 = Rf,2 = Rf . Using a
+similar analysis as we did for our modeling, we could prove the following bound:
+                          DI ≤ dkRF +RP +Rf,1 (t−2k)−ℓ .
+We see that their ideal degree is lower than ours only if s ≤ ℓ − Rf,1 (t − 2k). As
+s ≥ 0 and Rf,1 > 0, this would imply that ℓ > (t − 2k). The case ℓ > (t − 2k)
+corresponds to the case where a nontrivial invariant subspace exists for MI ,
+which is avoided in the new Poseidon instances.
+   Thus, our modeling leads to a lower ideal degree than theirs. Moreover, we
+have shown that the Gröbner basis computation step has negligible complexity
+compared to the change of ordering step for most sets of parameters, which was
+not the case in their work. This implies the following complexity comparison:
+                      CGB,ours ≤ CFGLM,ours ≤ CFGLM,[36] .
+
+4.3   Neptune in compression mode
+While Neptune has originally been intended for use in sponge mode, a recent
+work [36] has considered its security in compression mode, and provided an
+attack exploiting the low degree of the inverse of full rounds. We recall that
+the compression mode they considered for a permutation P : Ftp → Ftp is defined
+as x 7→ Trunck (x + P (x)), where Trunck returns the first k coordinates of its
+input. In this section, we show that our framework can greatly improve their
+results by computing a Gröbner basis efficiently, in a way similar to the previous
+subsection, and providing precise bounds for the ideal degree of the system.
+   More precisely, if we let ℓ = t − k the length of the subspace trail in the
+partial rounds, Rf,1 (resp. Rf,2 ) the number of full rounds in the input (resp.
+output) side of the permutation, we provide a modeling of a preimage attack
+whose ideal degree is upper bounded as:
+                         DI ≤ dRP −ℓ · 4(k−1)·Rf,1 +Rf,2 .
+as long as Rf,1 ≥ Rf,2 and RP ≥ ℓ + ⌊logd (4Rf,1 −Rf,2 )⌋ + 1 (which is the case
+for any realistic set of parameters). Note that this upper bound matches the
+results from [36, Table 10], i.e. it corresponds to the ideal degrees they observed
+for RP ≥ 4 (this condition corresponds exactly to the one we required for our
+bound to be true).
+
+                                          23
+Polynomial modeling We model the preimage on the compression function
+as follows:
+1. We recall the subspace trail technique from [15]: We let e1 , . . . , ek ∈ Ftp a
+   basis of the vector space {v ∈ Ftp | MIj · v ∈ {0} × Ft−1
+                                                         p , 0 ≤ j ≤ t − k − 1}.
+                                                Pk
+   Setting the state before partial rounds as i=1 xi · ei allows the state after
+   ℓ = t − k partial rounds to be linear in the xi (as this space avoids the xd
+   through t − k rounds). We set wt(xi ) = d.
+2. In a similar way as for Poseidon, we introduce variables yj in the input of
+   the j-th partial round xd , when ℓ + 1 ≤ j ≤ RP − ⌊logd (4Rf,1 −Rf,2 )⌋ − 1.
+                                                                             (j−1)
+   We set their weight to wt(yj ) = 1. This adds polynomials Pj = yj − R1          ,
+            (j−1)
+   where R1       is a polynomial representing the first coordinate of the state
+   vector before the j-th partial round.
+3. We add an additional variable y in the input of the RP −⌊logd (4Rf,1 −Rf,2 )⌋-th
+   round xd . We set its weight to
+                                                4Rf,1 −Rf,2
+                                  wt(y) =               R   −Rf,2        .
+                                            d⌊logd (4 f,1           )⌋
+
+                                              (R −⌊log (4Rf,1 −Rf,2 )⌋−1)
+   This adds a polynomial P = y − R1 P           d
+                                                                .
+4. We apply the ⌊logd (4Rf,1 −Rf,2 )⌋ last partial rounds, and Rf,2 full rounds in
+   the forward direction to get the first k output words of the permutation.
+   Likewise, we apply the Rf,1 full rounds in the backward direction to get the
+   first k input words. Summing the input and output gets us the equations
+   Q1 , . . . , Qk corresponding to being a preimage of the compression function.
+
+A CheapLunch structure Our system is as follows:
+ – k variables xi of weight d, RP − ⌊logd (4Rf,1 −Rf,2 )⌋ − ℓ − 1 variables yj of
+                                                               Rf,1 −Rf,2
+   weight 1 and one variable y of weight 4Rf,1 −Rf,2 /d⌊logd (4           )⌋
+                                                                             .
+                                Rf ,1
+ – k equations Qi of weight 4         · d, whose homogeneous component of highest
+   weight only depends on x2 , . . . , xk , y.
+ – The equation Pℓ+1 , whose leading monomial is x1 .
+               d
+ – LM(Pj ) = yj−1    for ℓ + 2 ≤ j ≤ RP − ⌊logd (4Rf,1 −Rf,2 )⌋ − 1 and LM(P ) =
+    d
+   yR −⌊log (4Rf,1 −Rf,2 )⌋−1 .
+      P     d
+
+
+
+Ideal degree It follows from the weighted Bézout bound and from what we
+observed in the previous paragraph, that:
+                            DI ≤ dRP −ℓ · 4(k−1)·Rf,1 +Rf,2 .
+
+Gröbner basis computation We have seen that the system has a CheapLunch
+structure. In addition to this structure, we can observe that the top parts of the
+Qi are of the form:
+                                      R    −Rf,2
+                              ⌊logd (4 f,1       )⌋+1
+                                                        ·4Rf,2
+                Qtop
+                 i   = µi · y d                                  + Q̃i (x2 , . . . xk ) ,
+
+
+                                              24
+where at least one µi ̸= 0. Thus, taking a monomial ordering such that xi ≺ y ≺
+yj , we can, up to an invertible Fp -linear transform of the Qi , get to:
+                                 Rf,1 −Rf,2
+                      ⌊logd (4              )⌋+1
+                                                   ·4Rf,2
+      LM(Q1 ) = y d                                         , Qtop
+                                                               i   ∈ Fp [x2 , . . . , xk ] , 2 ≤ i ≤ k .
+
+Hence, we get a new CheapLunch structure where Q = {Qi | 2 ≤ i ≤ k} is a
+system with k − 1 equations of weight d · 4Rf,1 in x2 , . . . , xk . Using Theorem 1,
+we get
+                      wdreg ≤ d · ((k − 1) · 4Rf,1 + 1) .
+This bound matches the one we observe experimentally.
+
+
+5     Non-Regular Examples
+We now move on to CheapLunch systems that do not follow Definition 9. In other
+words, Qtop is not regular, so that we can no longer rely on the arguments used
+to prove Lemma 1. In particular, the computation of the Gröbner basis of Q may
+feature non-trivial cancellation in the top parts of the polynomials, which we refer
+to as degree fall polynomials. Thus, the Gröbner basis may contain polynomials
+that are not in P, but such that some yi divides its leading monomial. This
+prevents us from applying the strategy from Section 3 directly to our system.
+    In this section, we report our observations on these systems and give some
+proven and conjectured upper bounds on the associated ideal degree. We leave as
+an open problem a more efficient computation of the first Gröbner basis in this
+case. In the meantime, we advise the designers to consider the change-of-order
+step as the most costly and to use these conjectured bounds for its estimation.
+
+5.1     Griffin
+The Griffin hash function was introduced at Crypto 2023 [31]. While several
+full-round instances have been broken in the k = 1 case [7,8], no cryptanalysis
+has been done for the case where k > 1. In what follows, we propose a new
+modeling for the CICO-k problem when k > 1. This modeling provides an upper
+bound on the ideal degree, that we observed to be not tight. We also made,
+based on our observation a conjecture on the actual ideal degree of the system.
+We leave as an interesting open problem a proof of Conjecture 1 as well as finding
+efficient ways of computing a Gröbner basis.
+
+Specification of Griffin The Griffin round function is defined as a compo-
+sition of three steps:
+                                                                      1/d
+ 1. A partial-SPN step (x1 , x2 , x3 , . . . , xt ) 7→ (x1 , xd2 , x3 , . . . , xt ) where d > 1
+    is minimal such that gcd(p − 1, d) = 1.
+ 2. A Horst layer that maps xi to xi if i = 1, 2, xi · G1 (x1 , x2 , 0) if i = 3 and
+    xi · Gi−2 (x1 , x2 , xi−1 ) when i > 3, where the Gi are quadratic functions that
+    never equal 0.
+
+                                                        25
+ 3. An affine layer defined using a matrix M and round constants c(i) .
+
+The round function is also represented in Figure 5. Note that the permutation
+applies a linear layer before the first round. The round numbers of full instances
+of Griffin can be found in [31].
+
+
+Proving an upper bound on DI We introduce for each round 1 ≤ i ≤ R
+intermediate variables yi , zi , where yi lies in the input of the xd and zi in the
+output of x1/d . We also set wt(yi ) = wt(zi ) = 3i−1 /d, 1 ≤ i ≤ R, and xj , 1 ≤
+j ≤ k on the branches of the unknown input, with wt(xj ) = 1. From the cubic
+                                                                 (i)
+Horst layer, we can easily prove that at each round, wdeg(Rj ) = 3i−1 , thus:
+
+                       (i)                        (i)
+       wdeg(zid − R1 ) = wdeg(yi − R2 ) = 3i−1 ,                        wdeg(Qj ) = 3R .
+
+                                                                              (i)      (i)
+Applying the weighted Bézout bound (5) to the system {zid − R1 , yi − R2 | 1 ≤
+i ≤ R} ∪ {Qj | 1 ≤ j ≤ k} gives:
+                                                          R
+                                       DI ≤ d2 · 3k            .
+
+Note that this bound is not tight even for k = 1, it has been proven in [7] that
+                                    R
+in this setting, DI = (d · (2d + 1)) . Based on our experiments with differing
+values of k, d, we make the following conjecture:
+
+Conjecture 1. The ideal degree of an R-round Griffin CICO-k problem is upper
+bounded by
+                                                R
+                         DI ≤ d · d(3k − 1) + 1     .
+
+
+5.2   ArionHash
+
+ArionHash is an arithmetization oriented hash function proposed in [44]. Similar
+to Griffin, the underlying permutation uses inversion on one branch of its non-
+linear layer, and low degree functions on the other branches. The constructions
+follows the so called Generalized Triangular Dynamical System (GTDS) formu-
+lation [43]. ArionHash instantiates, in sponge mode, the permutation Arion-π
+which we briefly recall below. Let p ≥ 5 be a prime, t the number of branches,
+e the smallest positive integer such that gcd(e, p − 1) = 1, and 121 ≤ α ≤ 257
+an integer such that gcd(α, p − 1) = 1. For 1 ≤ i ≤ t − 1, let δi,1 , δi,2 , µi ∈ Fq
+be such that gi (x) = x2 + δi,1 · x + δi,2 is a quadratic function without zeroes
+in Fq and define hi (x) = x2 + µi · x. Then the non-linear layer of Arion-π is
+F = {f1 , . . . , ft }, where each fi is defined “from-right-to-left” by the equations:
+
+                                       1/α
+              ft (y1 , . . . , yt ) = yt     ,
+                                                                                             (11)
+              fi (y1 , . . . , yt ) = yie · gi (σi,t ) + hi (σi,t ),   t−1≥i≥0
+
+
+                                                  26
+where σi,t represents the sum of all previously computed inputs and outputs
+                                     t
+                                     X
+                           σi,t =            yj + fj (y1 , . . . , yt ).
+                                    j=i+1
+
+    The permutation Arion-π is defined as follows, where L⟩ is an affine function
+defined as in [44, Definition 3]
+
+            Arion-π : Ftp −→ Ftp ,         x 7−→ Lr ◦ Fr · · · L1 ◦ F1 ◦ L0 (x)       (12)
+
+Polynomial Modeling Consider the CICO-k problem for ArionHash, where
+                                                                      (i)      (i)
+we write the input state as (x1 , ..., xk , 0t−k ). Let us denote by Lj , and Fj the
+value on branch j after Li and Fi , respectively. For i-th round, we introduce
+intermediate variable yi on the last branch and the corresponding equation
+                                     (i−1)
+                     Pi := yiα − Lt          (x1 , . . . , xk , y1 , . . . , yi−1 )   (13)
+
+The CICO-k constraints on the final output will yield polynomials Q1 , . . . , Qk
+of degree (2t−1 (e + 1) − e)r . Assigning the weights wt(xi ) = 1, 1 ≤ i ≤ k and
+                     (i−1)
+wt(yi ) = deg(Lt           ), 1 ≤ i ≤ r gives us the system P = {P2 , . . . , Pr }, Q =
+{Q1 , . . . , Qk } in the CheapLunch form
+
+Explaining non-regularity With the above weighted monomial order the
+polynomials of P = {P2 , . . . , Pr } will have co-prime leading monomials. However,
+the homogeneous component of the highest weight of Q, that is Qtop                    top
+                                                                         1 , . . . , Qk
+will not be regular. This because the highest degree terms of all polynomi-
+als will be constant multiples of the same state element from previous round.
+More concretely, the state after the non-linear layer of the last round will be
+   (r)         (r)
+(F1 , . . . , Ft ). After the final linear layer, the output will be linear combina-
+tion of these state elements. So, for 1 ≤ j ≤ k we have
+
+                            t
+                            X
+                                        (r)
+                     Qj =         cj,m Fm   (x1 , . . . , xk , y1 , . . . , yr )      (14)
+                            m=1
+
+where we omit the round constant addition for simplicity, We see (for instance
+from [44, Lemma 2] that deg(F1r ) > deg(F2r ) > . . . > deg(Ftr ). The highest de-
+                                                                              (r)
+gree component of each of Q1 , . . . , Qk will be the highest degree term of F1 , and
+we have trivial relations involving the Qi ’s. For example, denoting by T op(p(x))
+the homogeneous component of highest degree of some polynomial p, we have
+
+                             Qtop
+                              1    Qtop       (r)
+                                  = 2 = T op(F1 ) .                                   (15)
+                             c1,1   c2,1
+As a result, condition 1 of Definition 5 will not be satisfied and hence the system
+will not be regular. We can cancel out this common term from, say Q2 by a
+
+
+                                                27
+linear combination and define Q̄2 , which will now have the highest degree term
+        (r)
+from F2 , while Q1 remains the same. Essentially, we have eliminated the higher
+                                                          (r)                         (r)
+degree terms in Q2 that are constant multiples of F1 (and not just T op(F1 )),
+                    top   top            top      top
+and we still have ⟨Q1 , Q2 ⟩ = ⟨Q1 , Q̄2 ⟩. In fact, we can generalize this for
+k > 2, and perform similar linear transformations pair by pair for Qtop                 top
+                                                                          1 , . . . , Qk ,
+                               top              top
+after which we get Qtop1 , Q̄2     , . . . , Q¯k , that still generate the same ideal.
+When we replace deg(Qj ) with deg(Q̄j ) for j = 2, . . . , k, in the Weighted Bézout
+Bound (2), we get the following upper bound for the ideal degree
+                                        Qk
+                                    αr ( j=1 deg(Q̄j ))
+                               DI ≤      Qr                                           (16)
+                                           j=1 wj
+
+where wj are the monomial weights and it can be shown, following induction
+argument similar to [44, Appendix C.1] that
+
+          deg(Q̄j ) = deg(Fjr ) = (2t−1 (e + 1) − e)(r−1) · (2t−j (e + 1) − e)
+
+Note that since Q1 , . . . , Qk were initially of degree (2t−1 (e+1)−e)r we improved
+the Weighted Bézout Bound by replacing the generators of the ideal with new
+generators that have a smaller degree. We present the experimental results and
+other observations for DI in Appendix E.2.
+
+
+Acknowledgements
+
+This work has been facilitated through the COSINUS associate team between
+Inria and Simula. The authors would like to thank Vincent Neiger and Maël
+Hostettler for insightful discussions in the early stages of this work. The work
+of Antoine Bak and Aurélien Boeuf was supported by the European Research
+Council (ERC, grant agreement no. 101041545 “ReSCALE”). Aurélien Boeuf
+was also supported in part by the French Agence Nationale de la Recherche
+through the SWAP project under Contract ANR-21-CE39-0012. Antoine Bak
+was also supported by the French DGA. The work of Morten Øygarden and
+Atharva Phanse has been funded by a research grant from the Ethereum Foun-
+dation through the Poseidon Cryptanalysis Initiative.
+
+
+References
+ 1. Alfonsı́n, J.L.R.: The Diophantine Frobenius Problem, vol. 30. Oxford University
+    Press (2005)
+ 2. Ashur, T., Bhati, A.S., Kindi, A., Mahzoun, M., Perrin, L.: XHash: Efficient
+    STARK-friendly hash function. Cryptology ePrint Archive, Report 2023/1045
+    (2023), https://eprint.iacr.org/2023/1045
+ 3. Ashur, T., Buschman, T., Mahzoun, M.: Algebraic cryptanalysis of HADES design
+    strategy: Application to POSEIDON and poseidon2. Cryptology ePrint Archive,
+    Paper 2023/537 (2023), https://eprint.iacr.org/2023/537
+
+
+                                            28
+ 4. Ashur, T., Kindi, A., Meier, W., Szepieniec, A., Threadbare, B.: Rescue-prime
+    optimized. Cryptology ePrint Archive, Report 2022/1577 (2022), https://eprint.
+    iacr.org/2022/1577
+ 5. Bak, A., Perrin, L.: On the security of Split-and-Lookup-based ZK-friendly primi-
+    tives. IACR Transactions on Symmetric Cryptology 2025(2), 87–123 (2025)
+ 6. Bardet, M., Faugère, J.C., Salvy, B.: On the complexity of the f5 gröbner basis
+    algorithm. Journal of Symbolic Computation 70, 49–70 (2015)
+ 7. Bariant, A., Boeuf, A., Lemoine, A., Manterola Ayala, I., Øygarden, M., Perrin, L.,
+    Raddum, H.: The Algebraic FreeLunch: Efficient Gröbner Basis Attacks Against
+    Arithmetization-Oriented Primitives. In: Annual International Cryptology Confer-
+    ence (Crypto). pp. 139–173. Springer (2024)
+ 8. Bariant, A., Boeuf, A., Briaud, P., Hostettler, M., Øygarden, M., Raddum, H.: Im-
+    proved Resultant Attack against Arithmetization-Oriented Primitives. Cryptology
+    ePrint Archive, Paper 2025/259 (2025), https://eprint.iacr.org/2025/259
+ 9. Bariant, A., Bouvier, C., Leurent, G., Perrin, L.: Algebraic attacks against some
+    arithmetization-oriented primitives. IACR Transactions on Symmetric Cryptology
+    2022(3), 73–101 (Sep 2022). https://doi.org/10.46586/tosc.v2022.i3.73-101,
+    https://tosc.iacr.org/index.php/ToSC/article/view/9850
+10. Becker, E., Mora, T., Marinari, M.G., Traverso, C.: The shape of the shape lemma.
+    In: Proceedings of the 1994 International Symposium on Symbolic and Algebraic
+    Computation. p. 129–133 (1994)
+11. Ben-Sasson, E., Goldberg, L., Levit, D.: STARK friendly hash – survey and recom-
+    mendation. Cryptology ePrint Archive, Paper 2020/948 (2020), https://eprint.
+    iacr.org/2020/948
+12. Bernshtein, D.N.: The number of roots of a system of equations. Functional Anal-
+    ysis and Its Applications 9, 183–185 (1975), https://api.semanticscholar.org/
+    CorpusID:122772773
+13. Berthomieu, J., Neiger, V., Safey El Din, M.: Faster change of order algorithm for
+    gröbner bases under shape and stability assumptions. In: Proceedings of the 2022
+    International Symposium on Symbolic and Algebraic Computation. pp. 409–418
+    (2022)
+14. Bertoni, G., Daemen, J., Peeters, M., Van Assche, G.: On the Indifferentiability of
+    the Sponge Construction. In: Annual International Conference on the Theory and
+    Applications of Cryptographic Techniques. pp. 181–197. Springer (2008)
+15. Beyne, T., Canteaut, A., Dinur, I., Eichlseder, M., Leander, G., Leurent, G., Naya-
+    Plasencia, M., Perrin, L., Sasaki, Y., Todo, Y., et al.: Out of oddity–new cryptana-
+    lytic techniques against symmetric primitives optimized for integrity proof systems.
+    In: Advances in Cryptology–CRYPTO 2020: 40th Annual International Cryptol-
+    ogy Conference, CRYPTO 2020, Santa Barbara, CA, USA, August 17–21, 2020,
+    Proceedings, Part III 40. pp. 299–328. Springer (2020)
+16. Bouvier, C., Briaud, P., Chaidos, P., Perrin, L., Salen, R., Velichkov, V., Willems,
+    D.: New design techniques for efficient arithmetization-oriented hash functions:
+    Anemoi permutations and jive compression mode. In: Annual International Cryp-
+    tology Conference. pp. 507–539. Springer (2023)
+17. Campa, L., Roy, A.: Groebner basis cryptanalysis of anemoi. Cryptol-
+    ogy ePrint Archive, Paper 2025/814 (2025). https://doi.org/10.1007/
+    978-3-031-91107-1_11, https://eprint.iacr.org/2025/814
+18. Cox, D.A., Little, J., O’Shea, D.: Ideals, Varieties, and Algorithms: An Introduction
+    to Computational Algebraic Geometry and Commutative Algebra. Springer, fourth
+    edn. (2015)
+
+
+                                           29
+19. Faugère, J.C.: A new efficient algorithm for computing gröbner bases
+    (f4). Journal of Pure and Applied Algebra 139(1), 61–88 (1999).
+    https://doi.org/https://doi.org/10.1016/S0022-4049(99)00005-5,
+    https://www.sciencedirect.com/science/article/pii/S0022404999000055
+20. Faugère, J.C.: A new efficient algorithm for computing gröbner bases without re-
+    duction to zero (f5). In: Proceedings of the 2002 International Symposium on Sym-
+    bolic and Algebraic Computation. p. 75–83. ISSAC ’02, Association for Comput-
+    ing Machinery, New York, NY, USA (2002). https://doi.org/10.1145/780506.
+    780516, https://doi.org/10.1145/780506.780516
+21. Faugère, J.C., Gaudry, P., Huot, L., Renault, G.: Sub-cubic change of ordering for
+    gröbner basis: a probabilistic approach. In: Proceedings of the 39th International
+    Symposium on Symbolic and Algebraic Computation. pp. 170–177 (2014)
+22. Faugère, J.C., Gaudry, P., Huot, L., Renault, G.: Using symmetries in the index
+    calculus for elliptic curves discrete logarithm. Journal of Cryptology 27(4), 595–635
+    (2014)
+23. Faugère, J., Gianni, P.M., Lazard, D., Mora, T.: Efficient computation of zero-
+    dimensional gröbner bases by change of ordering. J. Symb. Comput. 16(4), 329–344
+    (1993). https://doi.org/10.1006/JSCO.1993.1051, https://doi.org/10.1006/
+    jsco.1993.1051
+24. Faugère, J.C., Mou, C.: Sparse FGLM algorithms. Journal of Symbolic Computa-
+    tion 80, 538–569 (2017)
+25. Faugère, J.C., Safey El Din, M., Verron, T.: On the Complexity of Computing
+    Gröbner Bases for Quasi-homogeneous Systems. In: ISSAC ’13 : Proceedings of
+    the 38th International Symposium on Symbolic and Algebraic Computation. pp.
+    189–196. ACM, Boston, Maine, United States (Jun 2013). https://doi.org/10.
+    1145/2465506.2465943, https://inria.hal.science/hal-00780388
+26. Faugère, J.C., Safey El Din, M., Verron, T.: On the complexity of computing
+    Gröbner bases for weighted homogeneous systems. Journal of Symbolic Computa-
+    tion 76, 107–141 (2016)
+27. Faugère, J.C., Gaudry, P., Huot, L., Renault, G.: Polynomial systems solving by
+    fast linear algebra (2013), https://arxiv.org/abs/1304.6039
+28. Faugère, J.C., Gianni, P., Lazard, D., Mora, T.: Efficient computation of zero-
+    dimensional gröbner bases by change of ordering. Journal of Symbolic Computation
+    16(4), 329–344 (1993)
+29. Fusco, G., Bach, E.: Phase transition of multivariate polynomial systems. Mathe-
+    matical Structures in Computer Science 19(1), 9–23 (2009)
+30. Gianni, P., Mora, T.: Algebraic solution of systems of polynomial equations using
+    groebner bases. vol. 356, pp. 247–257 (01 1987)
+31. Grassi, L., Hao, Y., Rechberger, C., Schofnegger, M., Walch, R., Wang, Q.: Horst
+    meets fluid-SPN: Griffin for zero-knowledge applications. In: Annual international
+    cryptology conference. pp. 573–606. Springer (2023)
+32. Grassi, L., Khovratovich, D., Lüftenegger, R., Rechberger, C., Schofnegger, M.,
+    Walch, R.: Reinforced concrete: A fast hash function for verifiable computation.
+    p. 1323–1335. CCS ’22, Association for Computing Machinery, New York, NY,
+    USA (2022). https://doi.org/10.1145/3548606.3560686, https://doi.org/10.
+    1145/3548606.3560686
+33. Grassi, L., Khovratovich, D., Lüftenegger, R., Rechberger, C., Schofnegger, M.,
+    Walch, R.: Monolith: Circuit-friendly hash functions with new nonlinear layers for
+    fast and constant-time implementations. IACR Transactions on Symmetric Cryp-
+    tology 2024(3), 44–83 (Sep 2024). https://doi.org/10.46586/tosc.v2024.i3.
+    44-83, https://tosc.iacr.org/index.php/ToSC/article/view/11810
+
+
+                                           30
+34. Grassi, L., Khovratovich, D., Rechberger, C., Roy, A., Schofnegger, M.: Poseidon: A
+    New Hash Function for Zero-Knowledge Proof Systems. In: 30th USENIX Security
+    Symposium (USENIX Security 21). pp. 519–535 (2021)
+35. Grassi, L., Khovratovich, D., Schofnegger, M.: Poseidon2: A faster version of the
+    poseidon hash function. In: International Conference on Cryptology in Africa. pp.
+    177–203. Springer (2023)
+36. Grassi, L., Koschatko, K., Rechberger, C.: Poseidon and neptune: Gröbner ba-
+    sis cryptanalysis exploiting subspace trails. Cryptology ePrint Archive, Paper
+    2025/954 (2025), https://eprint.iacr.org/2025/954
+37. Grassi, L., Onofri, S., Pedicini, M., Sozzi, L.: Invertible quadratic non-linear lay-
+    ers for mpc-/fhe-/zk-friendly schemes over fnp: Application to poseidon. IACR
+    Transactions on Symmetric Cryptology 2022(3), 20–72 (Sep 2022). https://
+    doi.org/10.46586/tosc.v2022.i3.20-72, https://tosc.iacr.org/index.php/
+    ToSC/article/view/9849
+38. Jean, J.: TikZ for Cryptographers. https://www.iacr.org/authors/tikz/ (2016)
+39. Khovanskii, A.: Newton polyhedra and toroidal varieties. Functional Analysis
+    and Its Applications 11, 289–296 (1977), https://api.semanticscholar.org/
+    CorpusID:53613658
+40. Koschatko, K., Lüftenegger, R., Rechberger, C.: Exploring the six worlds
+    of gröbner basis cryptanalysis: Application to anemoi. IACR Transac-
+    tions on Symmetric Cryptology 2024(4), 138–190 (Dec 2024). https:
+    //doi.org/10.46586/tosc.v2024.i4.138-190, https://tosc.iacr.org/index.
+    php/ToSC/article/view/11953
+41. Kushnirenko, A.G.: Newton polytopes and the bezout theorem. Functional Anal-
+    ysis and Its Applications 10(3), 233–235 (1976). https://doi.org/10.1007/
+    BF01075534, https://link.springer.com/article/10.1007/BF01075534
+42. Lazard, D.: Gröbner bases, gaussian elimination and resolution of systems of al-
+    gebraic equations. In: van Hulzen, J.A. (ed.) Computer Algebra. pp. 146–156.
+    Springer Berlin Heidelberg, Berlin, Heidelberg (1983)
+43. Roy, A., Steiner, M.J.: Generalized triangular dynamical system: An algebraic sys-
+    tem for constructing cryptographic permutations over finite fields. In: International
+    Conference on Selected Areas in Cryptography. pp. 139–165. Springer (2024)
+44. Roy, A., Steiner, M.J., Trevisani, S.: Arion: Arithmetization-oriented permuta-
+    tion and hashing from generalized triangular dynamical systems. arXiv preprint
+    arXiv:2303.04639 (2023)
+45. Szepieniec, A., Lemmens, A., Sauer, J.F., Threadbare, B., Al-Kindi: The tip5 hash
+    function for recursive STARKs. Cryptology ePrint Archive, Paper 2023/107 (2023),
+    https://eprint.iacr.org/2023/107
+46. Van Der Hoeven, J., Schost, É.: Multi-point evaluation in higher dimensions. Appli-
+    cable Algebra in Engineering, Communication and Computing 24(1), 37–52 (2013)
+47. Yang, H.S., Zheng, Q.X., Yang, J., Liu, Q.F., Tang, D.: A New Security Evaluation
+    Method Based on Resultant for Arithmetic-Oriented Algorithms. In: International
+    Conference on the Theory and Application of Cryptology and Information Security
+    (AsiaCrypt). pp. 457–489. Springer (2024)
+
+
+A     On Sponges and CICOs
+In this appendix we briefly recall the sponge function [14], its usage in AO-
+cryptography and how various CICO problems (Definition 1) relate to concrete
+
+
+                                           31
+attacks on it. We will consider a AO-permutations F : Ftp −→ Ftp , where p is
+large. (More precisely, so large that it will not be feasible to guess inputs or take
+advantage of field equations xpi = xi .) Before introducing the sponge construction
+itself, we start with a brief discussion on polynomial systems solving relevant to
+our setting.
+
+A.1    Polynomial Systems in the AO Setting
+Since the function F can be written as t polynomials in t input variables, the
+CICO-(in,out) problem can essentially be viewed as solving a system of poly-
+nomial equations
+
+                   fi (x1 , . . . , xt−in ) = 0,    for 1 ≤ i ≤ out.
+
+As seen in the main body of this paper, an attacker often introduces further
+variables and equations to this system, in order to simplify computations and/or
+keep degrees small. As this expands the system by the same number of equa-
+tions and variables, the difference between variables and equations will solely be
+determined by the pair (t − in, out). This difference lead to the following cases.
+
+Determined Systems, in + out = t. All instances of polynomial system solving
+in this work consider a determined case (possibly after a reduction from an
+underdetermined case, see below). In this setting we expect the polynomial ideal
+to be zero dimensional, and have ideal degree DI > 1. The probability for
+random determined systems to have at least one solution is given in [29] as
+1 − 1/e (this is proved in the asymptotic case, and is also observed to hold in
+small-scale experiments by the authors). We therefore expect that determined
+CICO instances will have a solution with a fairly high probability, assuming that
+the underlying permutation behaves like a random system in this manner.
+
+Underdetermined Systems, in + out < t. Underdetermined polynomial systems
+will have a positive dimensional ideal, and we expect many solutions. Finding
+the whole solution space is generally difficult, as we lack efficient, direct methods
+for solving positive dimensional polynomial systems. One immediate workaround
+in cases where any one solution will do, is to fix a value for t − (in + out) input
+variables and solve for the resulting determined system as above. However, for
+AO-permutations we can often do better. The idea is to fix t − (in + out)
+linear combinations among the input to effectively cancel out some of the initial
+nonlinear operations, thus resulting in a determined system that is easier to
+solve. The details of this strategy will vary depending of the specifications of F ,
+and we refer to [9,7,8], as well as Appendix D for specific examples.
+
+Overdetermined Systems, in + out > t. Random overdetermined systems is
+                                                              −α
+only expected to have a solution with probability 1 − e−p , where α = in +
+out−t [29]. As such, given the larger values of p considered in this work, they are
+only relevant in cases where the attacker knows that there will exist a solution
+(e.g., certain preimage attacks on an observed digest).
+
+                                               32
+    We remark that an overdetermined system can naively be reduced to a de-
+termined case, by only considering t − in output constraints. As we generically
+expect a small number of solutions for determined cases, we do not anticipate
+that spurious solutions will pose a problem for this method, and they can eas-
+ily be disregarded a-posteriori through evaluating with the remaining output
+constraints.
+    More direct methods for solving overdetermined CICO problems is out of
+scope for this work, and we restrict ourselves to offer only a few remarks. Gröbner
+bases for overdetermined systems are, generally speaking, easier to compute than
+those of (under)determined systems with the same number of variables. Note that
+this does not necessarily translate into overdetermined CICO problems from AO
+permutations being easier to solve than their (under)determined counterparts,
+given that Gröbner basis computation is often not the bottleneck for the latter
+case. However, solving overdetermined systems will indeed boil down to comput-
+ing their Gröbner bases, as we expect either DI = 1 (with a single solution) or
+DI = 0 (no solutions). We therefore believe that the behavior of overdetermined
+CICO problems from AO permutations will differ significantly from the setting
+investigated in this paper, and that its study will provide an interesting topic
+for future work.
+
+
+A.2     The Sponge Construction
+
+The sponge construction is a general framework that constructs a hash function
+from the permutation F . Let integers r, c > 0 denote the rate and capacity
+respectively, where r+c = t. Figure 2 depicts the sponge function with respect to
+the permutation F . An input m ∈ Fsp is partitioned into blocks m1 , . . . , mk ∈ Frp .
+
+
+                  m0       m1       m2         m3             z0       z1       z2
+
+
+       r field
+      elements
+
+                       F        F        F          F              F        F
+
+       c field
+      elements
+
+
+                        Absorbing phase                      Squeezing phase
+
+
+                 Fig. 2. The sponge construction (Figure from [38]).
+
+
+If r does not divide the input length s, then the last tuple mk is padded via a
+suitable scheme to ensure length r (concrete examples of this can be found in [35,
+Section 3.1] and [2, Section 5.5]). The left half of the figure depicts the absorption
+phase, where the blocks of m is added to the state in between iterations of F .
+
+
+                                          33
+The right half of the figure is the squeeze phase where blocks of the digest is
+taken from the rate in between iterations of F . If the required digest length is
+not divisible by r, the remaining field elements are simply discarded at the end
+(along with the final state).
+
+A.3   Modeling Polynomial Systems From the Sponge
+Depending on its specifications, the sponge construction allows for several CICO
+problems to be modeled. Based on our discussion in Appendix A.1, we derive the
+following two rules of thumb for when modeling CICO systems that are easier to
+solve. Firstly, an attacker wishes to minimize the “size” of the CICO problem. In
+our setting this means looking for (under)determined cases that minimize out.
+Secondly, if there are more than one cases that yield the same out, we go for
+the problem with largest in, as this typically allows the attacker for bypass the
+most S-boxes.
+    With these considerations in mind, we offer the following concrete CICO
+problems and discuss how they translate to attacks on the overall hash function.
+We emphasize that this is not intended as an exhaustive list, nor will all cases
+be applicable in every scenario. (There is, in particular, a notable variation in
+sponge settings allowed by different designers. See, e.g., [34,35,2].)
+
+1. Collision Attack (in,out) = (c, c). Solving this problem yields an output
+   state where the capacity is 0, and hence a valid input state for the sponge.
+   This enables an attacker to set up collision attacks in settings that allow for
+   different input length for the sponge.
+2. Preimage Attack I (in,out) = (c, r). If r field elements are kept as out-
+   put from the squeezing (i.e., a single squeezing iteration), then solving this
+   problem yields a preimage of r field elements. More generally, for a digest
+   dig< r, this attack becomes (in,out) = (c,dig).
+3. Preimage Attack II (in,out) = (r, r). In cases with more than one squeez-
+   ing iteration, an attacker can attempt to recover a valid state by solving for
+   the unknown capacity elements (as the rate from two consecutive states can
+   be observed). We remark that for c > r, the CICO-problem itself will have
+   many valid solutions, although we expect only a single of them to yield a
+   valid preimage of the sponge. Hence, finding any valid CICO-solution, as
+   discussed in A.1 need not yield a valid attack. If, moreover, the digest is not
+   a multiple of r (i.e., dig mod r ̸= 0), we can focus on the CICO problem
+   from the last squeeze with parameters (in,out) = (r,dig mod r).
+4. Preimage Attack III (in,out) = (> c, r). This is a particular variant
+   of Preimage Attack I in settings that allow for the use of input size input
+   < r. In this case, an attacker can hope that a given digest has been hashed
+   with a small input, and attempt to solve for increasing input sizes (note that
+   the public padding scheme does not increase the degrees of freedom of the
+   system). This will result in (a series of) overdetermined system(s) where the
+   attacker will have a reasonable chance of success. If, in addition, we have a
+   digest dig< r, this attack becomes (in,out) = (t−input,dig).
+
+                                       34
+B    Background on Gröbner Bases
+
+This appendix provides some definitions and results on Gröbner bases that are
+used throughout the paper.
+
+Definition 10 (S-Polynomials). Let P, Q ∈ F[x], we define the S-polynomial
+of P and Q as:
+
+                   LCM(LM(P ), LM(Q))      LCM(LM(P ), LM(Q))
+    Spol(P, Q) =                      ·P −                    ·Q .
+                        LT(P )                  LT(Q)
+
+Proposition 3 (Buchberger’s Criterion, Chapter 2, §6, Theorem 6 in
+[18]). Let I ⊂ F[x] an ideal, G = {G1 , . . . , Gg } such that I = ⟨G⟩. We have that
+G is a Gröbner basis for I if and only if for all 1 ≤ i < j ≤ g, we have that
+
+                                                  G
+                               Spol(Gi , Gj ) −
+                                              →0.
+
+Proposition 4 (Coprime leading monomials [18, Chapter 2,§9,Prop 4]).
+Let G ⊂ F[x] a finite set. Let G1 , G2 ∈ G whose leading monomials are coprime.
+Then we have that
+                                                  G
+                               Spol(G1 , G2 ) −
+                                              →0.
+
+
+C    Change of ordering
+
+The most general algorithm for performing a change of ordering from a (w)grevlex
+Gröbner basis to a lex Gröbner basis is the FGLM algorithm [28]. This algo-
+rithm has complexity O(n · DI3 ) where n is the number of variables. Here we
+recall the main refinements of this result. Note that all the algorithms discussed
+in this appendix, with the exception of FGLM, assumes the knowledge of the
+multiplication matrix of some variable. This multiplication matrix can be com-
+puted freely under some stability condition [13]. Unfortunately, this assumption
+does not hold for the systems we describe in this paper, which may make the
+computation of the multiplication matrix a nontrivial step. A dedicated analysis
+for this step for CLS is given in C.1.
+
+
+Linear algebra-based change of ordering. Following [21], as long as the multi-
+plication matrix of xn is known, we can compute the last polynomial of a lex
+Gröbner basis in time
+                                     Õ(DIω ) .
+
+This is done by computing the characteristic polynomial of the multiplication
+matrix of xn .
+
+
+                                        35
+Sparse FGLM. In the case where we know that the multiplication matrix of xn is
+sparse, we can apply the Sparse-FGLM algorithm [24]. This algorithm recovers
+the last polynomial of the lex Gröbner basis in time
+                            O(DI · (Nn + log2 (DI ))) ,
+where Nn is the number of nonzero coefficients in the multiplication matrix of
+xn . It is known [24] that
+                        p in the case of a generic system of n equations of degree
+d, we have that Nn ∼ 6/nπ ·DI2 /d as d goes to infinity. This gives a complexity
+   p           2+(n−1)/n
+in 6/nπ · DI               for Sparse-FGLM, pwhich was used in [3] to assess the
+security of Poseidon. Neglecting for the 6/nπ factor, this estimate compares
+well to the linear algebra-based one when ω > 2 + (n − 1)/n. Taking ω = 2.807
+as in the Strassen algorithm, this happens only when n ≤ 5, which is neither the
+case for the modeling presented in [3] nor in our paper.
+
+Hermite Normal Form change of ordering. When the multiplication matrix of
+xn is known, and when the system is in shape position, i.e. its lex Gröbner basis
+contains a univariate polynomial of degree DI , [13] shows that the change of
+order can be computed in time
+                               Õ tω−1
+                                           
+                                    n   DI ,
+where tn is a sparsity indicator of this multiplication matrix, with tn DI ≈ Nn ,
+which shows that this bound improves on both the linear algebra-based and
+Sparse FGLM techniques. In particular, tn being the number of non-trivial
+columns in the multiplication matrix, it is equal the size of the bordering |Bxn (G)|,
+as defined in Appendix C.1, which we bound in Lemma 2 with some additional
+hypotheses. In our case, we are only looking for a single univariate polynomial
+in the ideal, and we can safely ignore ignore the shape assumption of the HNF
+paper. Indeed, we can re-order the coefficients of the multiplication matrix using
+an adaptation of Theorem 5.2 when y is not the smallest variable (as this last
+hypothesis is unused in the proof), and computing its Hermite Normal Form in
+the said complexity.
+
+C.1    Refined analysis of the multiplication matrix computation for
+       CheapLunch Systems based on FGLM’s approach
+We here present a dedicated complexity analysis of the computation of the multi-
+plication matrix described in FGLM [28, Proposition 3.1]. The general principle
+of the algorithm is the same, but we define borderings w.r.t some variable xi or
+yi , and give an upper bound on their sizes. This allows us to show that the com-
+plexity of computing the multiplication matrices for CLS in SNP, under some
+stability assumption of Q, can be reduced to
+                                   (n + m)DI3
+                                              
+                               O                  ,
+                                        dm
+
+   where di = deg(Qtop
+                   i ) for 1 ≤ i ≤ m.
+
+
+                                         36
+Bordering of an ideal. Let (Q, P) ⊂ R = F[x1 , . . . , xm , y1 , . . . , yn ] be a CLS in
+SNP for some monomial order ≺, and G be a Gröbner basis of I = ⟨Q ∪ P⟩ w.r.t.
+≺. We denote by C the canonical basis (w.r.t. G) of the quotient ring R/I. The
+bordering of the ideal I w.r.t a variable x ∈ R is defined as
+
+                             Bx (G) = {xm | m ∈ C} \ C,
+and we obtain the bordering of I by taking the union over all variables in R:
+                                        [
+                       B(G) =                      Bz .
+                                      z∈{x1 ,...,xm ,y1 ,...,yn }
+
+
+In other words, the surface B(G) is made up of monomials t that do not them-
+selves belong to C, but where we can find a variable z | t such that m
+                                                                     z ∈ C. For
+a CLS in SNP the size of these borderings are restricted as follows.
+Lemma 2. Let (P, Q) be a CLS with Q that verifies stability and is in SNP
+for some monomial order ≺ s.t. wt(xi ) = wx is constant for the variables xi ,
+1 ≤ i ≤ m (but the weights of the yi are not necessarily constant). Let G be a
+Gröbner basis for the CLS w.r.t ≺, and let us denote dl = deg(Qtop
+                                                                 l ). Then we
+have
+                                 n         m−1    ℓ
+                                      !                 !!
+                                 Y          X Y      dl
+                   |Bxm (G)| ≤      αl ·                   ,
+                                                     wx
+                                      l=1             ℓ=1     l=1
+
+where the αi ’s are as described in Definition 8. In particular, when none of the
+Qtop
+  l   are linear in the xi ’s (i.e. dl ≥ 2wx for all l), we have, if we denote DI the
+ideal degree:
+                                                   2DI wx
+                                |Bxm (G)| ≤               .
+                                                    dm
+
+Proof. First, let us consider the monomial ordering ≺′ on the xi such that
+wt≺′ (xi ) = wt≺ (xi )/wx . The monomial ordering ≺′ is a grevlex ordering on the
+xi since all its weights are 1. It can easily be seen that these ordering are equiv-
+alent when comparing monomials containing xi ’s, therefore that G≺′ (Qtop ) =
+G≺ (Qtop ) which we denote G(Qtop ), and that the borderings w.r.t. the variables
+xi are equal in both cases. Let us assume the stability of Q. This property implies
+that Bxm (G(Qtop )) ⊂ LM(G(Qtop )). As:
+                                 n
+                  (                                                   )
+                                Y
+                      γ β                                         top
+             C= y x |γ∈             {0, . . . , αi − 1}, β ∈ C(G(Q )) ,
+                                i=1
+
+we have for t ∈ C, that xm t ̸∈ C only if t = yγ xβ , β ∈ Bxm (G(Qtop )). Thus
+                         n                             n
+                               !                           !
+                        Y                             Y
+                                            top
+         |Bxm (G)| =        αi · |Bxm (Q )| ≤            αi · |G(Qtop )| .
+                          i=1                                 i=1
+
+
+                                              37
+   We can then use the SNP of Qtop and Theorem 12 from [6] with the grevlex
+ordering ≺′ (such that deg≺′ (Qtop
+                                l ) = dl /wx ) to upper bound the number of
+elements in a reduced Gröbner basis by
+                                      m−1  ℓ
+                                                  !
+                              top
+                                      X Y      dl
+                        |G(Q )| ≤                   .
+                                               wx
+                                             ℓ=1     l=1
+
+
+   This concludes the first part of the theorem. When the Qtop l   are not linear,
+then dl /wx ≥ 2 for all l, thus the sums of these terms can be bounded by twice
+the largest term, i.e:
+                                      m−1    ℓ          m−1
+                                                  !
+                              top
+                                      X Y      dl        Y dl
+                        |G(Q )| ≤                    ≤2          .
+                                               wx           wx
+                                          ℓ=1      l=1           l=1
+                             Qn       Qm
+   This, together with DI = ( l=1 αl ) l=1 (dl /wx ), concludes the proof.                   ⊔
+                                                                                             ⊓
+
+Refined algorithm. The algorithm proceeds as follows, from a Gröbner basis G
+(whose leading terms have coefficient one) w.r.t. an order ≺:
+
+ 1. Sort the bordering B(G) according to the monomial order ≺, and denote
+    the elements of the sorted bordering as {b1 , . . . b|B(G)| } (s.t. bi ≺ bi+1 for all
+    i).
+ 2. Iterate on i = 1 . . . |B(G)|. At each iteration, compute RedG,≺ (bi ) using
+    the already computed normal forms of bj , for j < i. To do so, proceed the
+    following way:
+    (a) If bi is the leading term of an element of g ∈ G, the reduction is bi − g.
+    (b) Else, if xm |bi and bi /xm ∈ B(G), compute Q = xm RedG,≺ (bi /xm ). The
+         monomials of Q which are not in C are all in Bxm (G), thus there are at
+         most |Bxm (G)| of them. Reduce each using the already computed normal
+         forms.
+    (c) Else, there exists another variable z ∈ {y1 , . . . yn , x1 , . . . xm−1 } s.t. bi /z ∈
+         B(G). In this case, compute Q = RedG,≺ (zRedG,≺ (bi /z)).
+ 3. Once all the normal forms of the bordering have been computed, all the
+    multiplication matrices Ti can be freely recovered.
+
+Complexity Analysis. We iterate |B(G)| ≤ (n + m)DI times. At each itera-
+tion, step (a) costs at most O(DI ), for a total cost of roughly O(|B(G)| · DI ).
+At each iteration, step (b) costs |Bxm (G)| · DI , for a total cost of roughly
+O(|B(G)| · |Bxm (G)| · DI ). For estimating the cost of step (c), let us give an
+upper bound on the number of elements of B(G) which do not satisfy the con-
+dition of (b). Condition of (b) is not satisfied if either bi ̸∈ Bxm (G) or xm ∤ bi .
+There are at most |Bxm (G)| iterations such that bi ∈ Bxm (G). Let us now es-
+timate the number of monomials bi ∈ B(G) which are such that xm ∤ bi with
+bi ∈
+   / Bxm (G). For z ∈ {y1 , . . . , yn , x1 , . . . , xm−1 }, if bi ∈ Bz (G) is not divisi-
+ble by xm , then bi /z ∈ C, and there exists j s.t. bi /z × xim ∈ Bxm (G). This
+
+
+                                              38
+map from monomials Bz (G) non divisible by xm to Bxm (G) is injective, there-
+fore there are at most |Bxm (G)| monomials of Bz (G) that are not divisible by
+xm . In total, (n + m)|Bxm (G)| is an upper bound of the number of elements of
+B(G) going through (c). Each element going through (c) induces a complexity
+of |DI | · |Bz (G)| ≤ DI2 look-up table accesses, therefore this last step has a total
+complexity O((n + m)|Bxm (G)| · DI2 ).
+    In total, given that |B(G)| ≤ (n + m)DI and |Bxm (G)| = O(DI wt(xm )/dm ),
+the complexity of computing the multiplication matrix is:
+
+                               O (n + m)DI3 wx /dm .
+                                                     
+
+
+C.2    Refined analysis of the multiplication matrix based on [27]
+Computing the multiplication matrix in a grevlex ordering. Let ≺ be a grevlex
+ordering and dmax be the maximal total degree among monomials in the canon-
+ical basis of R/I, so that dmax + 1 is a bound for the total degree of elements
+in B(G). The idea of [27, Algorithm 4] is to sort the elements in the bordering
+B(G) according to their total degree instead of the monomial ordering, that
+is, for each 1 ≤ d ≤ dmax + 1, consider B(G)d the elements of the border-
+ing B(G) of degree d. [27] remarked that if the normal forms of elements of
+B(G)1 . . . B(G)d−1 have been computed, then the normal forms of all elements
+of B(G)d can be computed simultaneously. To do so, for each m ∈ B(G)d , [27]
+finds a polynomial in I whose leading term is m: either m is the leading term
+of an element of G, or m can be written as xi × m′ with m′ ∈ B(G)d−1 , which
+implies that xi (m′ − RedG,≺ (m′ )) is a polynomial in I whose leading term is m.
+[27] places each such polynomial in a Macaulay-like matrix Md , whose columns
+represent the monomials in B(G)1 ∪ · · · ∪ B(G)d ∪ C. [27] also places the poly-
+nomials m − RedG,≺ (m) for m ∈ B(G)1 ∪ · · · ∪ B(G)d−1 in Md . Let us define
+                               Pd−1
+Bd = |B(G)d | and B1,d−1 = i=1 Bi . All in all, Md is a B1,d × (B1,d + DI )
+matrix. the inner structure of Md can be described as:
+
+                                    Bd B1,d−1 DI
+                                                    !
+                                    A     B     C       Bd
+                           Md =
+                                    0     I     D       B1,d−1
+
+
+    where 0 and I correspond to respectively the zero and identity matrices. From
+this matrix, in order to obtain the normal forms of the elements of B(G)d , all
+one has to do is to compute A−1 (C − BD), which is a Bd × DI matrix containing
+all the desired normal forms.
+
+Complexity analysis. We make use of the following lemma:
+Lemma 3 (Rectangular matrix multiplication). Let M and m × n matrix
+and N an n × p matrix. The product M · N can be computed in time:
+
+                    O(max(mnpω−2 , mω−2 · np, mnω−2 · p)) .
+
+
+                                         39
+The lemma follows from a decomposition of M and N in square blocks of size
+min(m, n, p).
+   Computing the normal forms of the elements of B(G)d at step d requires to
+compute A−1 in
+                                 O(Bdω )
+operations, computing B × D in
+                                                                       
+         O max(Bdω−2 · B1,d · DI , Bd · B1,d
+                                         ω−2
+                                             · DI , Bd · B1,d · DIω−2 )
+
+operations, and finally computing A−1 × (C − BD) in
+
+                         O max(Bdω−1 · DI , Bd · DIω−1 )
+                                                        
+
+
+operations.
+   Since Bd ≤ B1,d ≤ nDI (where n is the number of variables) and max(a, b) ≤
+a + b, the cost of step d can easily be bounded by:
+
+                          O(Bdω−2 · nDI2 + nBd · DIω−1 ).
+
+   Therefore, because of the concavity of the function x 7→ xω−2 , and assuming
+that n ≤ dmax , the total complexity can be bounded by:
+
+
+             dmax
+              X+1
+                    O Bdω−2 · nDI2 + nBd · DIω−1
+                                                   
+
+              d=1
+                                               !ω−2                   
+                                Pdmax +1
+                                           Bd
+             ≤ O nDI2 dmax        d=1
+                                                       + nB1,dmax DIω−1 
+                                    dmax
+
+             = O(d3−ω
+                  max n
+                        ω−1 ω
+                           DI + n2 DIω )
+             = O(d3−ω
+                  max n
+                        ω−1 ω
+                           DI ).
+
+Adaptation to weighted orderings. Let us now assume that we possess a Gröbner
+basis for a weighted monomial ordering with weights (w1 , . . . wn ). In order to use
+the multiplication matrix computation algorithm of [27] with weighted orderings,
+we need the wi ’s to be integers, so that the elements in the bordering B(G)
+have integer weighted degrees, and so that for each m ∈ B(G), there exists an
+integer 1 ≤ d ≤ wdmax +max(wi ), where wdmax is the maximum weighted degree
+among monomials in the canonical basis of R/I, such that m ∈ B(G)d . The same
+analysis holds, but dmax + 1 should be replaced by wdmax + max(wi ). Since we
+expect every variable to appear in R/I, we expect wdmax ≥ max(wi ), giving the
+following bound for computing a multiplication matrix for CheapLunch systems:
+
+                            O wd3−ω        ω−1 ω
+                                                 
+                                max (n + m)   DI .                              (17)
+
+
+                                         40
+D     Round-skipping trick on the first rounds
+
+
+D.1    Case of SPN with monomial S-boxes
+
+
+Case of an MDS matrix In this section, we show how reduce the ideal degree
+of the ideal by partially skipping the first round. Let M an MDS matrix, and
+s = ⌊t/k⌋ − 2 ≤ k. We also let M −1 = (minv   ij )1≤i,j≤t the inverse of M , which
+is also MDS. For 1 ≤ l ≤ s, we consider the matrix (minv  ij )     t−k+1≤i≤t     :
+                                                                                (l−1)(k+1)+1≤j≤l(k+1)
+this k × (k + 1) matrix has a kernel of dimension at least 1. We let al a nonzero
+vector in this kernel.
+    Then, we turn our attention to (minv
+                                     ij ) t−k+1≤i≤t , this is a k × (t − s(k + 1))
+                                                         s(k+1)+1≤j≤t
+submatrix of M −1 . As M −1 is MDS, its submatrix has full rank. Thus, we can
+find independent vectors as+1 , . . . ak in its kernel (as k − s ≤ t − s(k + 1) − k)
+                  t−s(k+1)                                      (1)
+and a vector b ∈ Fp        such that M −1 ((0, . . . , 0, b) − cE ) ∈ Fpt−k × {0}k .
+    Setting the state after the affine layer to
+
+                                                           k
+                                                                               !
+                               1/d
+                                                           X
+                         a1 · x1 , . . . , as · x1/d
+                                                 s ,              al · xl + b      ,
+                                                          l=s+1
+
+
+we get after the layer of S-boxes the state
+
+       ad1 · x1 , . . . , ads · xs , P1 (xs+1 , . . . , xk ), . . . , Pt−s(k+1) (xs+1 , . . . , xk ) ,
+                                                                                                    
+
+
+where the Pi have degree d. Multiplying the weight of x1 , . . . , xs by d and keeping
+weights of xs+1 , . . . , xk and the yj , we keep the same bounds on the weighted
+degrees of the polynomials in the system from Section 4.1 and 4.2. Thus, our
+new weights only increase the denominator in the weighted Bézout bound by a
+factor ds , dividing the upper bound on DI by the same factor.
+
+
+
+Case of a non-MDS matrix Though we did not manage to do an extensive
+study of the round-skipping tricks in the non-MDS case, we have made some
+observations that tend to show that non-MDS matrices such as the ones defined
+in Poseidon2 may be weaker against such tricks than MDS ones. We provide
+here an example of a vector allowing to skip two rounds in the case where ME is
+defined as in [35] and where t = 16, k = 1 (ie. we reduce DI by a factor d2 instead
+of d). This tends to show that contrary to what was believed by the designers
+of Poseidon2, using non-MDS matrices not only weakens the security against
+statistical attacks, but also against some algebraic attacks. The matrix ME is as
+
+                                                    41
+                                 1/d
+                          a11 · x1            xd     ad11 · x1
+
+                                 1/d
+                          a12 · x1            xd     ad12 · x1
+
+                                 1/d
+                          a13 · x1            xd     ad13 · x1
+
+                                 1/d
+                          a14 · x1            xd     ad14 · x1
+
+                         a21 · x2 +
+                ME                            xd    P1 (x2 , x3 )   ME
+                        a31 · x3 + b1
+                         a22 · x2 +
+                                              xd    P2 (x2 , x3 )
+                        a32 · x3 + b2
+                         a23 · x2 +
+           0                                  xd    P3 (x2 , x3 )
+                        a33 · x3 + b3
+                         a24 · x2 +
+           0                                  xd    P4 (x2 , x3 )
+                        a34 · x3 + b4
+                         a25 · x2 +
+           0                                  xd    P5 (x2 , x3 )
+                        a35 · x3 + b5
+
+
+                Fig. 3. Round-skipping trick for t = 9, k = 3, s = 1.
+
+
+
+follows:                                          
+                10 14 2 6 5 7 1 3 5 7 1 3 5 7 1 3
+                8 12 2 2 4 6 1 1 4 6 1 1 4 6 1 1 
+                                                  
+                2 6 10 14 1 3 5 7 1 3 5 7 1 3 5 7 
+                                                  
+                2 2 8 12 1 1 4 6 1 1 4 6 1 1 4 6 
+                                                  
+                5 7 1 3 10 14 2 6 5 7 1 3 5 7 1 3 
+                                                  
+                4 6 1 1 8 12 2 2 4 6 1 1 4 6 1 1 
+                                                  
+                1 3 5 7 2 6 10 14 1 3 5 7 1 3 5 7 
+                                                  
+                1 1 4 6 2 2 8 12 1 1 4 6 1 1 4 6 
+                5 7 1 3 5 7 1 3 10 14 2 6 5 7 1 3  .
+                                                  
+                                                  
+                4 6 1 1 4 6 1 1 8 12 2 2 4 6 1 1 
+                                                  
+                1 3 5 7 1 3 5 7 2 6 10 14 1 3 5 7 
+                                                  
+                1 1 4 6 1 1 4 6 2 2 8 12 1 1 4 6 
+                                                  
+                5 7 1 3 5 7 1 3 5 7 1 3 10 14 2 6 
+                                                  
+                4 6 1 1 4 6 1 1 4 6 1 1 8 12 2 2 
+                                                  
+                1 3 5 7 1 3 5 7 1 3 5 7 2 6 10 14
+                 1 1 4 6 1 1 4 6 1 1 4 6 2 2 8 12
+
+We can for instance skip two rounds on an instance defined over the prime
+number pkoalabear = 231 − 224 + 1, in which case d = 3 and the first two round
+
+
+                                         42
+constants9 are:
+                                                  
+                       0x1b9721fa          0x37b608e3
+                     0x1252dc26        0x2a201928
+                                                  
+                     0x686dc5c6        0x6a38a2ab
+                                                  
+                     0x65e48721        0x796c8c09
+                                                  
+                     0x68c4a3e4         0x460cd14 
+                                                  
+                     0x5dc974d7        0x6bac6d28
+                                                  
+                     0x6c06ab8f        0x4551b22d
+                                                  
+                 (1)
+                     0x286a3475 (2) 0x773c1a8d
+                C = 
+                                  , C = 0x5e977d45 .
+                                                   
+                      0x103790a                   
+                     0x13dcd1d0        0x463ecca9
+                                                  
+                     0x30cfa2c1        0x7011d7aa
+                                                  
+                     0x6087354f        0x7767d67f
+                                                  
+                     0x7c66b137        0x545d8d19
+                                                  
+                     0x42070c64        0x2801b9fe
+                                                  
+                     0x6f777ed5        0x143c8a7e
+                       0xbc35277           0x1bdd37c
+
+We can have a subspace chain of the form:
+
+                   SE ◦(C (1) +ME (.))         SE ◦(C (2) +ME (.))
+       a0 · X + b0 −−−−−−−−−−−−→ a1 · Y + b1 −−−−−−−−−−−−→ a2 · Z + b2 .
+
+where
+                                                           
+                0x0              0x3055717b              0x0
+            
+               0x0    
+                       
+                                0x2112c45a
+                                           
+                                                    
+                                                        0x0    
+                                                                
+            
+               0x0    
+                               0x3405c236
+                                                  
+                                                        0x0    
+                                                                
+            
+               0x0    
+                               0x7133b04c
+                                                  
+                                                        0x0    
+                                                                
+            0x3ae7d1cb        0x7b577bb9         0xfe00000 
+                                                           
+            0x693aa524         0xd508a2e        0x6f200001
+                                                           
+            0x2892157b         0x56357b8        0x5f400000
+                                                           
+            0x2ceec489
+                        , b0 = 0x12546263 , a1 = 0x3f800001 ,
+                                                             
+       a0 = 
+            0x44182e36        0x1cb56c27        0x6f200001
+                                                           
+            0x15c55add         0x258c017         0xfe00000 
+                                                           
+            0x566dea86        0x4aefc4d0        0x1fc00001
+                                                           
+            0x52113b78        0x560b9321        0x3f800000
+                                                           
+            
+               0x0    
+                       
+                                0x709b4660
+                                           
+                                                    
+                                                        0x0    
+                                                                
+            
+               0x0    
+                               0x22d30c54
+                                                  
+                                                        0x0    
+                                                                
+               0x0                0x0               0x0    
+                0x0                  0x0                 0x0
+
+
+9
+    Taken from: https://github.com/0xPolygonZero/hash-constants
+
+
+                                         43
+                                                            
+             0x7735495b               0x0             0x4631f432
+            0x537f27be             0x0           0x751952a5
+                                                            
+            0x1bb89dd6             0x0           0x19d1ccbf
+                                                            
+            
+                0x8    
+                        
+                                 
+                                     0x0   
+                                            
+                                                     0x6c58e374
+                                                                
+            
+                0x0    
+                        
+                                 
+                                     0x1   
+                                            
+                                                     
+                                                         0x0    
+                                                                 
+            
+                0x0    
+                        
+                                 
+                                     0x0   
+                                            
+                                                     0x7547bdb1
+                                                                
+            
+                0x0    
+                        
+                                 
+                                     0x0   
+                                            
+                                                     0x6f214b81
+                                                                
+                0x0                0x0           0x4998e026
+       b1 = 
+            
+                         , a2 = 0x7f000000 , b2 = 
+                                                              .
+                0x0                                  0x0    
+                                                                 
+            
+                0x0    
+                        
+                                 
+                                     0x0   
+                                            
+                                                     0x4ff97fbe
+                                                                
+            
+                0x0    
+                        
+                                 
+                                     0x0   
+                                            
+                                                     0x1d4d82d8
+                                                                
+            
+                0x0    
+                        
+                                 
+                                     0x0   
+                                            
+                                                     0x710ad114
+                                                                
+            0x6074c09b             0x0           0x19a2ea37
+                                                            
+             0x545fc9f             0x0           0x565348fb
+                                                            
+            0x53c6e278             0x0           0x66dd789c
+             0x4e44b8b7               0x0              0x906ff3d
+We leave as an open problem a more systematic study of this phenomenon.
+
+
+D.2     Case of Griffin
+
+The bounds on the ideal degree have been derived by introducing the variables
+x1 , . . . , xk on k input branches in a naive way and setting the t − k other ones to
+0. When t > 2k, it is feasible to choose the input state to get a modeling with a
+lower ideal degree. Let t, k ∈ N, we can skip rounds in Griffin as summarized
+in Table 3. We introduce αd,k = d(3k − 1) + 1 and recall that without round-
+skipping, we conjecture that DI ≤ (d · αd,k )R . We say that we have an advantage
+over DI of α if we can find a modeling of the CICO problem that makes the
+ideal degree upper bounded by (d · αd,k )R /α.
+
+
+   t      2k + 1    ≥ 2k + 2     4k + 2 − 2s, s ≤ k/2    4k + 4       ≥ 4k + 6
+ Adv.       d     d · αd,k /3k
+                                 d · αd,k /3  2s−1        2
+                                                    d · αd,k    (d · αd,k )2 /3k
+            Table 3. Advantage over DI using round skips in Griffin.
+
+
+
+   The round-skipping tricks are performed as follows:
+
+ – Let t = 2k + 1: We can find a k-dimensional vector space X ⊂ Ft−k
+                                                                   p   × {0}k
+                                          t−1
+   such that for x ∈ X, M · x ∈ {0} × Fp . Thus we do not activate the first
+   round x1/d , reducing the ideal degree by a factor d.
+ – Let t ≥ 2k + 2: We take a k-dimensional space such that for x ∈ X, M · x ∈
+   {0}2 × Ft−2
+            p . Thus we do not activate the first round x
+                                                          1/d
+                                                              and xd , so that
+   we only have degree 3 polynomials in the xi at round 2 (we do not have to
+   introduce y1 and z1 ).
+
+
+                                         44
+ – Let t = 4k + 2 − 2s, s ≤ k/2: We can find a k-dimensional vector space
+   X ⊂ Ft−k
+          p    × {0}k such that for x ∈ X, M · x ∈ {0}2 × (Fp × {0})2(k−s) × F2s          p .
+   Taking an input state in X, we can get after the first nonlinear layer a state
+   of the form:
+                                                                                      
+              0, 0, L1 (x), 0, . . . , L2(k−s) (x), 0, L̃1 (x), P2 (x), . . . , P2s (x) ,
+
+   where the Li , L̃1 are linear functions, and the Pi have degree 3. Introducing
+   for each Pi a variable x̃i = Pi (x) of weight 1, we get a state of weight 1 after
+   one round at the cost of 2s − 1 equations of degree 3. Hence, it amounts
+   to skipping one round of Griffin and adding 2s − 1 equations of degree 3,
+   which adds a factor 32s−1 to the ideal degree of an R − 1-round Griffin.
+ – Let t = 4k + 4: In addition to not activating the xd , x1/d and one out of two
+   branches in the Horst layer in the first round, we also do not activate the
+   second round x1/d . This is feasible as we can find a k + 1-dimensional space
+   such that for x ∈ X, M · x ∈ {0}2 × (Fp × {0})2k+1 . After the first nonlinear
+   layer, this space is mapped to another k + 1-dimensional vector space and
+   we can cancel out the coordinate in x1/d of the second round.
+ – The case t ≥ 4k + 6 is very similar to the previous one, except that we make
+   use of our additional degree of freedom to not activate the second round xd .
+
+
+E      Experiments
+E.1     Regularity assumption tests
+We test the property of regularity (Definition 9)used in proving results on the
+Gröbner basis computation of CheapLunch systems from Section 4. Specifically,
+we check if the Hilbert series of the highest degree component of the subsystem Q
+is equal to the expected form as stated in Definition 5. To make the computation
+of the system more efficient, we make certain simplifications in our experiment.
+Specifically, as we are only interested in higest degree (“top”) part of the system,
+we remove (at round level computation) the constant addition and also get rid
+of the lower degree terms after computing the partial rounds. This allows us
+to construct the polynomials more efficiently in order to test closer to realistic
+parameters. Then we compute the Hilbert series in Magma and compare it with
+the expected form, in python, Following is the table of parameters for which we
+performed the tests.
+
+Poseidon For generating the MDS matrix, we used the SageMath script 10
+provided in the Poseidon paper, and use the same primes for our tests. In Table
+4 we list the different values of number of full rounds RF , number of partial
+rounds RP , S-Box exponent α, number of branches t, CICO-constraint k for
+which we verified the regularity assumption.
+10
+     https://extgit.isec.tugraz.at/krypto/hadeshash/-/tree/master/code?ref_
+     type=heads
+
+
+                                            45
+                Field size (bits)    RF /2            RP     α    t       k
+                       64                2            20     3    24      2,3
+                       64                3            20     3    24      2
+                      254             2,3             20     5    3       2
+                      254             2,3             20     5    5       2
+                      255                2            20     5    3       2
+                     255             2       20     5      5      2
+               Table 4. Parameters tested for regularity for Poseidon
+
+
+
+Neptune We follow the design from [37] and generator random matrices, which
+are used to define external and internal MDS matrix. In Table 5 we list the
+different values of number of first full rounds RF 1 , number of partial rounds RP ,
+number of first full rounds RF 2 , number of branches t, CICO-constraint k for
+which we verified the regularity assumption. The S-Box exponent α is always
+set to 3.
+
+
+               Field size (bits)    RF 1      RP           RF 2       t       k
+                      64             2            6         1     4,6,8       2
+                     255             2            6         1     4,6,8       2
+                    254            2       6       1       4,6,8  2
+               Table 5. Parameters tested for regularity for Neptune
+
+
+
+
+E.2   ArionHash
+We provide the details of experiments for testing the ideal degree for some in-
+stances of ArionHash. We choose small scale parameter sets, following [44]. Specif-
+ically, for two cases p = 10007, e = 3 and p = 15013, e = 5, we vary the values of
+t, k, α and compute the degree of the ideal DI . In [44] this was only tested for the
+case of k = 1, and in this case the experimental data matches their conjectured
+upper bound. However for k > 1 we observed that the Weighted Bézout bound
+2 is not tight for estimating the value of DI . This is expected since the system
+is not regular as discussed in 5.2. Below we present the experimental results for
+ideal degree of ArionHash in table E.2 and show that the upper bound we derive
+in (16) holds.
+
+A better upper bound for DI As discussed in 5.2, the output constraint poly-
+                                                    (r)          (r)
+nomials Q1 , . . . , Qk are linear combinations of F1 , . . . , Ft and deg(F1r ) >
+
+
+                                             46
+                     t   k       p = 10007, e = 3        p = 15013, e = 5
+                                  DI      Bound           DI      Bound
+                                           α=7
+                     4   2        623       2639          1351        5719
+                     5   2       1855      12383          4207       27391
+                     5   3       3619     160979         11557      520429
+                     6   2       4991      53375         11599      119119
+                                          α = 257
+                     4   2       22873    96889          49601      209969
+
+            Table 6. Experimental results for Ideal degree of ArionHash
+
+
+
+
+deg(F2r ) > . . . > deg(Ftr ). Hence, the system os not regular, but we use these
+dependencies to cancel out higher degree terms and improve the upper bound
+for DI . Moreover, as seen in table E.2, this bound is far from being a tight
+bound and we point out a possible cause of this, which is presence of further
+dependencies in the polynomials. From equation (11), we can write
+
+
+          r              (r−1)                              (r−1)
+    T op(Fj−1 (x)) = Lj−1 (x)e · T op(σj,t )2 = Lj−1 (x)e · T op(Fjr (x))2        (18)
+               (r)       (r−1)           (r−1)
+        T op(Ft−1 ) = Lt−1 (x)e · (Lt            (x)))2 ,                         (19)
+
+
+
+    Thus, we can see that after the non-linear layer, the highest degree component
+of output on a branch depends on the input of that branch, and the highest
+degree component of the previous branch. (In fact this property was used in [44,
+Lemma 2] to prove the degree at every round). This observation could possibly be
+exploited to improve the upper bound from (16), since the degrees of polynomials
+in the state after a non-linear round decrease from “left-to -right”
+     However, there are certain limitations in test this experimentally. The highest
+degree at j-th round of ArionHash is (2t−1 (e + 1) − e)j . This limits us in the
+number of rounds for which we can build the polynomial system and compute the
+ideal degree. In our experiments, we could only test for r = 1. As a result of this,
+it is important to note that we cannot take into consideration the contribution of
+r and the contribution of weights in experimental values of DI . Moreover, from
+                  (r)                                                          (r−1)
+(19) the terms Fj have a recurrence relation, but they also depend on Lj
+                                                 (r−1)
+from the previous round, and for r = 1, Lk         ) are simply linear functions in the
+input variables x1 , . . . , xk . Thus, the exact contribution of these dependencies
+may not appear in experiments for r = 1.
+
+
+                                            47
+E.3   Griffin
+
+We provide here the results of our experiments on the weighted degree of regu-
+larity for the Griffin CICO-k problem. We conducted experiments on various
+values of k, d, R (with t = 8) and made the following conjecture:
+Conjecture 2 (weighted degree of regularity of Griffin). For all t, k, d, R, the
+weighted degree of regularity wdreg of the Griffin CICO-k problem is upper
+bounded as:
+                               wdreg ≤ dk · 3R .
+We computed the weighted degree of regularity by running weighted F5 on the
+system, and take the highest weighted degree at which a new polynomial is
+added to the Gröbner basis. It is easy to check that the Macaulay matrix at this
+degree contains a Gröbner basis of the system, and that this is the lowest degree
+verifying such condition. We report our results in the following tables, with a
+comparison to our conjectured upper bound.
+
+
+                              d       2        3           5   7
+                          wdreg      34        48       79     122
+                         dk · 3R    36    54     90    126
+           Table 7. Influence of d on wdreg in the case where k = R = 2.
+
+
+
+
+                     (R, k, d)    (2, 3, 2)        (2, 3, 3)   (3, 2, 2)
+                      wdreg          49               74           105
+                           R
+                     dk · 3       54         81         108
+                       Table 8. Influence of R, k on wdreg .
+
+
+
+
+E.4   Experimental results on XHash
+
+In the following table, our results on XHash are described. The column “Does
+Sec. 3.3 apply?” has a checkmark (✓) if and only if G(P, Q) can be decomposed
+as P ∪G(Q), and G(Q) can directly be computed from G(Qtop ) as per Section 3.3.
+Experimentally, we can use the following heuristic workaround in some of the
+“bad” cases: instead of defining Qtop only with the homogeneous top part of the
+Qi , use several “top homogeneous slices” from the Qi , none of which contain the
+yi,j variables. The system obtained is not homogeneous, but we can still use F4
+
+
+                                              48
+to compute a GB for it, and a variant of Lemma 1 applies correctly. The precise
+study of this approach falls outside of the scope of this paper, and we leave it
+for future work.
+
+
+    (t, k, nS )   wdreg   (Thm. 1)     DI     (Bézout)    Does Sec. 3.3 apply?
+      (2,2,1)      11       (17)        81      (243)               ✗
+      (3,2,1)      17       (17)       243      (243)               ✓
+      (3,2,2)      11       (17)       243      (729)               ✗
+      (3,3,1)      14       (25)       729     (2187)               ✗
+      (3,3,2)      13       (25)       729     (6561)               ✗
+      (4,2,1)      17       (17)       243      (243)               ✓
+      (4,2,2)      17       (17)       729      (729)               ✓
+      (4,2,3)      17       (17)       729     (2187)               ✗
+      (4,3,1)      25       (25)      2187     (2187)               ✓
+      (4,3,2)      19       (25)      2187     (6561)               ✗
+      (5,2,1)      17       (17)       243      (243)               ✓
+      (5,2,2)      17       (17)       729      (729)               ✓
+      (5,2,3)      17       (17)      2187     (2187)               ✓
+      (5,2,4)      17       (17)      2187     (6561)               ✗
+      (5,3,1)      25       (25)      2187     (2187)               ✓
+      (6,2,1)      17       (17)       243      (243)               ✓
+      (6,2,2)      17       (17)       729      (729)               ✓
+      (7,2,1)      17       (17)       243      (243)               ✓
+      (7,2,2)      17       (17)       729      (729)               ✓
+      (8,2,1)      17       (17)       243      (243)               ✓
+      (8,2,2)      17       (17)       729      (729)               ✓
+      (9,2,1)      17       (17)       243      (243)               ✓
+      (9,2,2)      17       (17)       729      (729)               ✓
+     (10,2,1)      17       (17)      243       (243)               ✓
+     (10,2,2)      17       (17)      729       (729)               ✓
+     (11,2,1)      17       (17)      243       (243)               ✓
+     (11,2,2)      17       (17)      729       (729)               ✓
+Table 9. Experimental data of XHash8 on a reduced version of (F )(B ′ )(P 3). nS is
+the number of Sboxes per (P ′ ) layer. We take α = 3 instead of 7.
+
+
+
+
+F    Figures of some round function
+
+
+
+
+                                        49
+      C0                       C1            C2            C3
+                                         1
+s0               x 7
+                                     x   7
+
+s1               x 7
+                                                  x7
+                                         1
+s2               x 7
+                                     x   7
+                                         1
+s3               x 7
+                                     x7
+s4               x7                               x7
+                                         1
+s5               x 7
+                                     x   7
+           M            M                1             M
+s6               x7                  x7
+s7               x7                               x7
+                                         1
+s8               x7                  x   7
+                                         1
+s9               x7                  x7
+s10              x7                               x7
+                                         1
+s11              x 7
+                                     x   7
+
+
+
+
+                Fig. 4. The first round of XHash8.
+
+
+
+
+                               M
+
+                               G1 ⊠
+                        0
+                                             G2 ⊠
+               x1/d       xd
+
+
+           Fig. 5. The Griffin round function for t = 4.
+
+
+
+
+                                50
+
